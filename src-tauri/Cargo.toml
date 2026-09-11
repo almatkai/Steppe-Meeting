@@ -1,0 +1,26 @@
+[package]
+name = "steppe-desktop"
+version = "0.1.0"
+description = "Steppe Meeting Desktop"
+edition = "2021"
+
+[lib]
+name = "steppe_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ScreenCaptureKit is an Apple framework. Listing it as an unconditional
+# dependency made `cargo build` fail on Windows and Linux before it compiled a
+# single line of this crate. Scoping it to macOS lets the app build everywhere;
+# on other platforms the recorder commands return a clear message and the
+# frontend falls back to getDisplayMedia, which it already supports.
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = { version = "10.0.3", features = ["macos_15_0"] }

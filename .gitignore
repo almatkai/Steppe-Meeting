@@ -1,0 +1,59 @@
+# Dependencies
+node_modules
+node_modules/
+.pnpm-store
+.pnpm-store/
+
+# Production builds
+dist
+dist/
+dist-ssr
+dist-ssr/
+*.local
+
+# Tauri / Rust build outputs
+src-tauri/target
+src-tauri/target/
+**/target/
+**/target
+
+# Python & virtual environment
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+backend/.venv
+backend/.venv/
+.venv
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Local databases, media, and export files
+backend/data/*.db
+backend/data/*.db-journal
+backend/data/audio/*
+!backend/data/audio/.gitkeep
+backend/data/exports/*
+!backend/data/exports/.gitkeep
+backend/data/logs/*
+!backend/data/logs/.gitkeep
+
+# Environment and sensitive files
+.env
+.env.*
+*.pem
+*.key
+
+# System & IDE files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+*.tsbuildinfo
+.vscode/
+.idea/
+*.swp
+*.swo
