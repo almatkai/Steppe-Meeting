@@ -125,7 +125,31 @@ async def _call(
                 await telemetry.emit('llm_waiting', **details,
                                      elapsed_seconds=round(time.monotonic() - started, 2))
         response = await request
-        response.raise_for_status()
+        if response.is_error:
+            error_detail = ""
+            try:
+                data = response.json()
+                if isinstance(data, dict):
+                    err_obj = data.get("error")
+                    if isinstance(err_obj, dict):
+                        error_detail = err_obj.get("message") or ""
+                    elif isinstance(err_obj, str):
+                        error_detail = err_obj
+                    if not error_detail:
+                        error_detail = data.get("detail") or data.get("message") or ""
+            except Exception:
+                error_detail = response.text[:300] if response.text else ""
+
+            if response.status_code == 404:
+                detail = f": {error_detail}" if error_detail else ""
+                raise LLMError(
+                    f"Модель '{model}' не найдена в Ollama или по указанному URL{detail}. "
+                    f"Скачайте модель в терминале: `ollama pull {model}` или выберите загруженную модель в Настройках."
+                )
+            if response.status_code in (401, 403):
+                raise LLMError(f"Ошибка авторизации ({response.status_code}): проверьте API-ключ в Настройках. {error_detail}")
+            raise LLMError(f"Ошибка LLM сервера ({response.status_code}): {error_detail or response.text[:200]}")
+
         body = response.json()
         log_record['completed_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         log_record['elapsed_seconds'] = round(time.monotonic() - started, 2)
@@ -339,7 +363,31 @@ async def _stream(url: str, model: str, headers: dict, messages: list, temperatu
     }
 
     async with client().stream('POST', url, json=payload, headers=headers) as response:
-        response.raise_for_status()
+        if response.is_error:
+            body = await response.aread()
+            error_detail = ""
+            try:
+                data = json.loads(body)
+                if isinstance(data, dict):
+                    err_obj = data.get("error")
+                    if isinstance(err_obj, dict):
+                        error_detail = err_obj.get("message") or ""
+                    elif isinstance(err_obj, str):
+                        error_detail = err_obj
+                    if not error_detail:
+                        error_detail = data.get("detail") or data.get("message") or ""
+            except Exception:
+                error_detail = body.decode(errors="replace")[:200]
+
+            if response.status_code == 404:
+                detail = f": {error_detail}" if error_detail else ""
+                raise LLMError(
+                    f"Модель '{model}' не найдена в Ollama или по указанному URL{detail}. "
+                    f"Скачайте её командой: `ollama pull {model}` или выберите загруженную модель в Настройках."
+                )
+            if response.status_code in (401, 403):
+                raise LLMError(f"Ошибка авторизации ({response.status_code}): проверьте API-ключ в Настройках. {error_detail}")
+            raise LLMError(f"Ошибка LLM сервера ({response.status_code}): {error_detail or body.decode(errors='replace')[:200]}")
 
         if 'text/event-stream' not in response.headers.get('content-type', ''):
             # The provider ignored stream:true (or does not support it)

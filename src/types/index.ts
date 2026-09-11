@@ -92,6 +92,8 @@ export interface Meeting {
 export interface SystemStatus {
   ollama: {
     connected: boolean;
+    service_online?: boolean;
+    model_ready?: boolean;
     url: string;
     model: string;
     available_models: string[];
@@ -184,4 +186,6 @@ export interface TemplateTestResult {
   values: Record<string, any>;
   slots_filled: number;
   has_test_docx: boolean;
+  model?: string;
+  generation_seconds?: number;
 }

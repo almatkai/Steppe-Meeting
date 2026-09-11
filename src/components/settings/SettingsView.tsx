@@ -5,6 +5,7 @@ import {
   Radio,
   CheckCircle2,
   XCircle,
+  AlertCircle,
   RefreshCw,
   Save,
   Check,
@@ -176,6 +177,11 @@ export const SettingsView: React.FC = () => {
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span>Подключено</span>
               </span>
+            ) : systemStatus?.ollama?.service_online && !systemStatus?.ollama?.model_ready ? (
+              <span className="flex items-center gap-1 text-amber-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20">
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span>Модель не скачана</span>
+              </span>
             ) : (
               <span className="flex items-center gap-1 text-rose-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20">
                 <XCircle className="w-3.5 h-3.5" />
@@ -184,10 +190,14 @@ export const SettingsView: React.FC = () => {
             )}
           </div>
 
-          {/* Connection error message if any */}
+          {/* Connection error or model missing message if any */}
           {!ollamaOk && ollamaErr && (
-            <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[11px] leading-relaxed">
-              <strong>Статус:</strong> {ollamaErr}
+            <div className={`p-2.5 rounded-xl border text-[11px] leading-relaxed ${
+              systemStatus?.ollama?.service_online && !systemStatus?.ollama?.model_ready
+                ? "bg-amber-500/10 border-amber-500/20 text-amber-300"
+                : "bg-rose-500/10 border-rose-500/20 text-rose-300"
+            }`}>
+              <strong>Внимание:</strong> {ollamaErr}
             </div>
           )}
 

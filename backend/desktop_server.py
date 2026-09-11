@@ -320,7 +320,7 @@ def sync_generation_settings():
     settings.LLM_BASE_URL = llm_url
     settings.LLM_MODEL = llm_model
     settings.LLM_API_KEY = llm_api_key
-    if "api.openai.com" in llm_url or (llm_api_key and llm_api_key.startswith("sk-")):
+    if "api.openai.com" in llm_url:
         settings.LLM_PRIMARY = "openai"
         settings.OPENAI_API_KEY = llm_api_key
         settings.OPENAI_LLM_MODEL = llm_model
@@ -1257,7 +1257,9 @@ async def test_template_run(template_id: str, req: Optional[TemplateTestRequest]
     test_transcript = (req.transcript.strip() if req and req.transcript else "") or template_generation.DEFAULT_TEST_TRANSCRIPT
     dl = (req.detail_level if req and req.detail_level else "") or row["detail_level"] or "concise"
 
-    # Try LLM generation first, fall back to mock values if offline/error
+    # This endpoint evaluates the configured model. Never hide model failures behind
+    # mock values: the user must see the real model result or a clear error.
+    generation_started = time.perf_counter()
     try:
         values = await template_generation.generate_template_values(
             parsed=parsed,
@@ -1267,18 +1269,14 @@ async def test_template_run(template_id: str, req: Optional[TemplateTestRequest]
             detail_level=dl,
         )
     except Exception as e:
-        logger.warning("LLM template value generation failed (%s), using mock generator", e)
-        values = _mock_template_values(parsed.slots)
+        logger.exception("LLM template test failed for template %s", template_id)
+        raise HTTPException(status_code=502, detail=f"Модель не смогла сформировать тестовый протокол: {e}") from e
 
-    # Render test docx
     try:
         rendered = docx_template.render_docx_template(docx_bytes, values, slots=parsed.slots)
-    except Exception as ren_err:
-        logger.exception("Render test docx error: %s", ren_err)
-        # Ensure values conform
-        fallback_values = _mock_template_values(parsed.slots)
-        values.update({k: v for k, v in fallback_values.items() if k not in values or not values[k]})
-        rendered = docx_template.render_docx_template(docx_bytes, values, slots=parsed.slots)
+    except Exception as e:
+        logger.exception("Render test docx failed for template %s", template_id)
+        raise HTTPException(status_code=422, detail=f"Модель вернула данные, которые не удалось вставить в DOCX: {e}") from e
 
     test_docx_path = TEMPLATES_DIR / f"{template_id}_test.docx"
     with open(test_docx_path, "wb") as f:
@@ -1297,6 +1295,8 @@ async def test_template_run(template_id: str, req: Optional[TemplateTestRequest]
         "values": values,
         "slots_filled": len(values),
         "has_test_docx": True,
+        "model": get_setting("llm_model", settings.LLM_MODEL),
+        "generation_seconds": round(time.perf_counter() - generation_started, 2),
     }
 
 
@@ -1778,6 +1778,7 @@ async def export_docx(
 async def system_status():
     llm_url = get_setting("llm_base_url", "http://localhost:11434/v1").rstrip("/")
     api_key = get_setting("llm_api_key", "").strip()
+    current_model = get_setting("llm_model", "qwen2.5:latest").strip()
     whisper_url = get_setting("whisper_base_url", "http://localhost:8000/v1").rstrip("/")
 
     headers = get_auth_headers(api_key)
@@ -1787,6 +1788,8 @@ async def system_status():
     ollama_ok = False
     ollama_err = ""
     ollama_models = []
+    is_cloud_provider = any(domain in llm_url for domain in ("api.openai.com", "openrouter.ai", "api.groq.com", "api.deepseek.com"))
+
     try:
         async with httpx.AsyncClient(timeout=3.5) as client:
             resp = await client.get(tags_url)
@@ -1807,6 +1810,25 @@ async def system_status():
     except Exception as e:
         ollama_err = str(e)
 
+    model_ready = False
+    if ollama_ok:
+        if is_cloud_provider:
+            model_ready = bool(api_key)
+            if not model_ready:
+                ollama_err = "Не указан API-ключ для внешнего провайдера"
+        else:
+            if ollama_models:
+                for m in ollama_models:
+                    # Exact match, or base match without :latest / tag
+                    if m == current_model or m.split(":")[0] == current_model.split(":")[0]:
+                        model_ready = True
+                        break
+            if not model_ready:
+                if not ollama_models:
+                    ollama_err = f"Ollama запущена, но нет скачанных моделей. Выполните: `ollama pull {current_model}`"
+                else:
+                    ollama_err = f"Модель '{current_model}' не скачана в Ollama. Выполните: `ollama pull {current_model}` (доступные: {', '.join(ollama_models)})"
+
     whisper_ok = False
     whisper_err = ""
     try:
@@ -1822,9 +1844,11 @@ async def system_status():
 
     return {
         "ollama": {
-            "connected": ollama_ok,
+            "connected": ollama_ok and model_ready,
+            "service_online": ollama_ok,
+            "model_ready": model_ready,
             "url": llm_url,
-            "model": get_setting("llm_model"),
+            "model": current_model,
             "available_models": ollama_models,
             "error": ollama_err,
         },
@@ -1852,8 +1876,7 @@ async def list_models():
             if resp.status_code == 200:
                 data = resp.json()
                 models = [m.get("name") for m in data.get("models", []) if m.get("name")]
-                if models:
-                    return sorted(models)
+                return sorted(models)
     except Exception:
         pass
 
@@ -1869,7 +1892,30 @@ async def list_models():
     except Exception as e:
         logger.warning("Failed to list models from %s: %s", models_url, e)
 
-    return ["qwen2.5:latest", "llama3.2:latest", "gpt-4o", "gpt-4o-mini", "llama-3.3-70b-versatile"]
+    return []
+
+class PullModelRequest(BaseModel):
+    model_name: str
+
+@app.post("/api/v1/system/pull-model")
+async def pull_model(req: PullModelRequest, background_tasks: BackgroundTasks):
+    llm_url = get_setting("llm_base_url", "http://localhost:11434/v1").rstrip("/")
+    base_url = llm_url[:-3] if llm_url.endswith("/v1") else llm_url
+    model_to_pull = req.model_name.strip()
+    if not model_to_pull:
+        raise HTTPException(status_code=400, detail="model_name is required")
+
+    async def do_pull():
+        try:
+            logger.info("Starting background pull for model %s...", model_to_pull)
+            async with httpx.AsyncClient(timeout=1800.0) as client:
+                res = await client.post(f"{base_url}/api/pull", json={"name": model_to_pull, "stream": False})
+                logger.info("Pull completed for %s: %s", model_to_pull, res.status_code)
+        except Exception as e:
+            logger.error("Failed to pull model %s: %s", model_to_pull, e)
+
+    background_tasks.add_task(do_pull)
+    return {"status": "pulling", "model": model_to_pull}
 
 @app.get("/api/v1/system/config")
 async def get_config():

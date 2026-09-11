@@ -8,6 +8,7 @@ import {
   Radio,
   CheckCircle2,
   XCircle,
+  AlertCircle,
   MessageSquare,
 } from "lucide-react";
 import { SteppeLogo } from "../ui/SteppeIcon";
@@ -127,6 +128,14 @@ export const AppSidebar: React.FC = () => {
               <div className="flex items-center gap-1 text-emerald-400 font-medium shrink-0">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                 <span>Active</span>
+              </div>
+            ) : systemStatus?.ollama?.service_online && !systemStatus?.ollama?.model_ready ? (
+              <div
+                className="flex items-center gap-1 text-amber-400 font-medium shrink-0"
+                title={systemStatus?.ollama?.error || "Модель не скачана"}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                <span>Нет модели</span>
               </div>
             ) : (
               <div className="flex items-center gap-1 text-rose-400 font-medium shrink-0">

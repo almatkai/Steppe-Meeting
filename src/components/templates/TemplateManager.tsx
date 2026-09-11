@@ -11,6 +11,8 @@ import {
   ChevronDown,
   ShieldCheck,
   FileUp,
+  Play,
+  X,
 } from "lucide-react";
 import { api } from "../../services/api";
 import type { ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../../types";
@@ -48,6 +50,10 @@ export const TemplateManager: React.FC = () => {
   // Per-template state
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [testing, setTesting] = useState<Record<string, boolean>>({});
+  const [activeTestId, setActiveTestId] = useState<string | null>(null);
+  const [testTranscript, setTestTranscript] = useState("");
+  const [testTranscriptFile, setTestTranscriptFile] = useState("");
+  const [testDetailLevel, setTestDetailLevel] = useState<"concise" | "standard" | "detailed">("standard");
   const [testResults, setTestResults] = useState<Record<string, TemplateTestResult>>({});
   const [testErrors, setTestErrors] = useState<Record<string, string>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -126,11 +132,52 @@ export const TemplateManager: React.FC = () => {
     }
   };
 
+  const openTest = (template: ProtocolTemplate) => {
+    if (activeTestId === template.id) {
+      setActiveTestId(null);
+      return;
+    }
+    setActiveTestId(template.id);
+    setTestTranscript("");
+    setTestTranscriptFile("");
+    setTestDetailLevel(template.detail_level || "standard");
+    setTestErrors((p) => ({ ...p, [template.id]: "" }));
+  };
+
+  const handleTranscriptFile = async (file: File | null, templateId: string) => {
+    if (!file) return;
+    setTestErrors((p) => ({ ...p, [templateId]: "" }));
+    if (file.size > 5 * 1024 * 1024) {
+      setTestErrors((p) => ({ ...p, [templateId]: "Файл транскрипта превышает 5 МБ" }));
+      return;
+    }
+    try {
+      const text = await file.text();
+      if (!text.trim()) throw new Error("Файл пуст или не содержит читаемого текста");
+      setTestTranscript(text);
+      setTestTranscriptFile(file.name);
+    } catch (e: any) {
+      setTestErrors((p) => ({ ...p, [templateId]: e.message || "Не удалось прочитать файл" }));
+    }
+  };
+
   const handleTest = async (id: string) => {
+    if (!testTranscript.trim()) {
+      setTestErrors((p) => ({ ...p, [id]: "Загрузите файл транскрипта или вставьте текст" }));
+      return;
+    }
     try {
       setTesting((p) => ({ ...p, [id]: true }));
       setTestErrors((p) => ({ ...p, [id]: "" }));
-      const res = await api.testTemplate(id, {});
+      setTestResults((p) => {
+        const next = { ...p };
+        delete next[id];
+        return next;
+      });
+      const res = await api.testTemplate(id, {
+        transcript: testTranscript.trim(),
+        detail_level: testDetailLevel,
+      });
       setTestResults((p) => ({ ...p, [id]: res }));
       await loadTemplates(); // refresh has_test_docx flag
     } catch (e: any) {
@@ -433,16 +480,17 @@ export const TemplateManager: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleTest(t.id)}
+                      onClick={() => openTest(t)}
                       disabled={!!testing[t.id]}
-                      title="Протестировать шаблон (LLM)"
-                      className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors disabled:opacity-50"
+                      title="Проверить модель на своём транскрипте"
+                      className={`flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-50 ${
+                        activeTestId === t.id
+                          ? "bg-violet-600 text-white"
+                          : "bg-violet-500/10 border border-violet-500/20 text-violet-300 hover:bg-violet-500/20"
+                      }`}
                     >
-                      {testing[t.id] ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <FlaskConical className="w-4 h-4" />
-                      )}
+                      {testing[t.id] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" />}
+                      <span>Тест с транскриптом</span>
                     </button>
                     {!isDefault && (
                       <button
@@ -484,32 +532,138 @@ export const TemplateManager: React.FC = () => {
                   </div>
                 )}
 
-                {/* Test result / error */}
-                {(result || testErr) && (
-                  <div className="mt-3 pt-3 border-t border-slate-800/80">
-                    {testErr ? (
-                      <p className="text-[11px] text-rose-300 flex items-center gap-1.5">
-                        <AlertTriangle className="w-3 h-3 shrink-0" />
-                        <span>{testErr}</span>
-                      </p>
-                    ) : result ? (
-                      <div className="flex items-center gap-3 flex-wrap text-[11px]">
-                        <span className="flex items-center gap-1.5 text-emerald-300 font-medium">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Тест пройден • заполнено полей: {result.slots_filled}</span>
+                {/* Test workspace: user's transcript -> model -> rendered protocol */}
+                {activeTestId === t.id && (
+                  <div className="mt-4 pt-4 border-t border-violet-500/20 space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 className="text-xs font-semibold text-white flex items-center gap-2">
+                          <FlaskConical className="w-4 h-4 text-violet-400" />
+                          Проверка модели на вашем транскрипте
+                        </h4>
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          Транскрипт будет отправлен текущей LLM. Результат заполнит поля этого шаблона.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTestId(null)}
+                        title="Закрыть"
+                        className="p-1 rounded-md text-slate-500 hover:text-white hover:bg-slate-800"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-[1fr_180px] gap-3">
+                      <label className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-900 border border-dashed border-slate-700 hover:border-violet-500 cursor-pointer transition-colors min-w-0">
+                        <UploadCloud className="w-4 h-4 text-violet-400 shrink-0" />
+                        <span className="min-w-0">
+                          <span className="block text-xs font-medium text-white truncate">
+                            {testTranscriptFile || "Загрузить транскрипт"}
+                          </span>
+                          <span className="block text-[10px] text-slate-500">TXT, MD, SRT, VTT или JSON • до 5 МБ</span>
                         </span>
-                        {result.has_test_docx && (
+                        <input
+                          type="file"
+                          accept=".txt,.md,.srt,.vtt,.json,text/plain,text/markdown,application/json"
+                          className="hidden"
+                          onChange={(e) => handleTranscriptFile(e.target.files?.[0] || null, t.id)}
+                        />
+                      </label>
+
+                      <select
+                        value={testDetailLevel}
+                        onChange={(e) => setTestDetailLevel(e.target.value as typeof testDetailLevel)}
+                        aria-label="Детализация тестового протокола"
+                        className="py-2.5 px-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-violet-500"
+                      >
+                        {DETAIL_LEVELS.map((d) => (
+                          <option key={d.value} value={d.value}>{d.label} протокол</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <textarea
+                      rows={7}
+                      value={testTranscript}
+                      onChange={(e) => {
+                        setTestTranscript(e.target.value);
+                        if (testTranscriptFile) setTestTranscriptFile("");
+                      }}
+                      placeholder="Или вставьте транскрипт совещания сюда..."
+                      className="w-full p-3 text-xs rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 leading-relaxed resize-y"
+                    />
+
+                    {testErr && (
+                      <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-300 flex items-center gap-2">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{testErr}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <span className="text-[10px] text-slate-500">
+                        {testTranscript.trim().length.toLocaleString("ru-RU")} символов
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {t.has_test_docx && !result && (
                           <button
                             type="button"
                             onClick={() => window.open(api.getTestDocxDownloadUrl(t.id), "_blank")}
-                            className="flex items-center gap-1 text-indigo-300 hover:text-indigo-200 underline font-medium"
+                            className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold"
                           >
-                            <Download className="w-3 h-3" />
-                            <span>Скачать тестовый DOCX</span>
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Последний тестовый DOCX</span>
                           </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => handleTest(t.id)}
+                          disabled={!!testing[t.id] || !testTranscript.trim()}
+                          className="flex items-center gap-1.5 py-2 px-4 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold shadow-md shadow-violet-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {testing[t.id] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                          <span>{testing[t.id] ? "Модель формирует протокол..." : "Запустить тест модели"}</span>
+                        </button>
                       </div>
-                    ) : null}
+                    </div>
+
+                    {result && (
+                      <div className="rounded-xl bg-emerald-500/5 border border-emerald-500/20 overflow-hidden">
+                        <div className="flex items-center justify-between gap-3 p-3 border-b border-emerald-500/15 flex-wrap">
+                          <span className="flex items-center gap-1.5 text-emerald-300 text-xs font-semibold">
+                            <CheckCircle2 className="w-4 h-4" />
+                            {result.model || "Модель"} заполнила {result.slots_filled} полей
+                            {result.generation_seconds != null && ` за ${result.generation_seconds} сек.`}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => window.open(api.getTestDocxDownloadUrl(t.id), "_blank")}
+                            className="flex items-center gap-1.5 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Скачать тестовый протокол .docx</span>
+                          </button>
+                        </div>
+                        <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/80">
+                          {Object.entries(result.values).map(([key, value]) => {
+                            const slot = t.slots.find((s) => s.key === key);
+                            return (
+                              <div key={key} className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-1.5 md:gap-4 px-3 py-2.5 text-[11px]">
+                                <div className="min-w-0">
+                                  <p className="font-medium text-slate-300 truncate">{slot?.label || key}</p>
+                                  <p className="font-mono text-slate-600 truncate">{key}</p>
+                                </div>
+                                <pre className="whitespace-pre-wrap break-words font-sans text-slate-200 leading-relaxed">
+                                  {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+                                </pre>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
