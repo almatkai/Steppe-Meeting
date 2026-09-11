@@ -89,6 +89,47 @@ export interface Meeting {
   template_values_kz?: Record<string, any>;
 }
 
+export interface WhisperModelCatalogItem {
+  id: string;
+  name: string;
+  size_mb: number;
+  description: string;
+  recommended: boolean;
+  downloaded: boolean;
+  disk_size_mb: number;
+  is_downloading: boolean;
+}
+
+export interface WhisperLocalStatus {
+  env_installed: boolean;
+  installing_env: boolean;
+  env_install_progress: string;
+  env_install_error?: string | null;
+  selected_model: string;
+  model_ready: boolean;
+  available_models: string[];
+  catalog: WhisperModelCatalogItem[];
+  downloading: boolean;
+  downloading_model?: string | null;
+  download_status: string;
+  download_progress_text: string;
+  download_error?: string | null;
+}
+
+export interface WhisperStatus {
+  connected: boolean;
+  mode: 'local' | 'custom';
+  url?: string;
+  model?: string;
+  error?: string;
+  local?: WhisperLocalStatus;
+  custom?: {
+    url: string;
+    model: string;
+    has_api_key: boolean;
+  };
+}
+
 export interface SystemStatus {
   ollama: {
     connected: boolean;
@@ -99,20 +140,19 @@ export interface SystemStatus {
     available_models: string[];
     error?: string;
   };
-  whisper: {
-    connected: boolean;
-    url: string;
-    model: string;
-    error?: string;
-  };
+  whisper: WhisperStatus;
 }
 
 export interface SystemConfig {
   llm_base_url: string;
   llm_model: string;
   llm_api_key?: string;
+  whisper_mode: 'local' | 'custom';
+  whisper_local_model: string;
+  whisper_device?: string;
   whisper_base_url: string;
   whisper_model: string;
+  whisper_api_key?: string;
 }
 
 export interface Citation {

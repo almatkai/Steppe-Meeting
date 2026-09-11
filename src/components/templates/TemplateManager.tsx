@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { api } from "../../services/api";
 import type { ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../../types";
+import { downloadFileFromUrl } from "../../utils/fileDownload";
 
 interface PreviewState {
   slots: ProtocolTemplateSlot[];
@@ -227,7 +228,7 @@ export const TemplateManager: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => window.open(api.getSampleTemplateDownloadUrl(), "_blank")}
+            onClick={() => downloadFileFromUrl(api.getSampleTemplateDownloadUrl(), "Образец_шаблона.docx")}
             className="flex items-center gap-1.5 py-1.5 px-3 rounded-lg bg-slate-950/70 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-600 text-[11px] font-medium transition-all"
           >
             <Download className="w-3.5 h-3.5" />
@@ -472,7 +473,7 @@ export const TemplateManager: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => window.open(api.getTemplateDownloadUrl(t.id, "working"), "_blank")}
+                      onClick={() => downloadFileFromUrl(api.getTemplateDownloadUrl(t.id, "working"), `${t.name || "Шаблон"}.docx`)}
                       title="Скачать DOCX"
                       className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
                     >
@@ -610,7 +611,7 @@ export const TemplateManager: React.FC = () => {
                         {t.has_test_docx && !result && (
                           <button
                             type="button"
-                            onClick={() => window.open(api.getTestDocxDownloadUrl(t.id), "_blank")}
+                            onClick={() => downloadFileFromUrl(api.getTestDocxDownloadUrl(t.id), `Тест_${t.name || "шаблон"}.docx`)}
                             className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold"
                           >
                             <Download className="w-3.5 h-3.5" />
@@ -639,7 +640,7 @@ export const TemplateManager: React.FC = () => {
                           </span>
                           <button
                             type="button"
-                            onClick={() => window.open(api.getTestDocxDownloadUrl(t.id), "_blank")}
+                            onClick={() => downloadFileFromUrl(api.getTestDocxDownloadUrl(t.id), `Тест_${t.name || "шаблон"}.docx`)}
                             className="flex items-center gap-1.5 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm"
                           >
                             <Download className="w-3.5 h-3.5" />

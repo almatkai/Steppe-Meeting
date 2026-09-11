@@ -58,7 +58,7 @@ def prepare_app_data_dir(legacy_dir: Path) -> Path:
             shutil.copy2(source, destination)
             logger.info("Migrated app data: %s -> %s", source, destination)
 
-    for directory in ("audio", "exports", "logs", "templates"):
+    for directory in ("audio", "exports", "logs", "templates", "models", "models/whisper"):
         (target / directory).mkdir(parents=True, exist_ok=True)
 
     return target

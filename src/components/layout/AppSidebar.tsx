@@ -152,12 +152,20 @@ export const AppSidebar: React.FC = () => {
           >
             <div className="flex items-center gap-2 truncate">
               <Radio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span className="text-slate-300 truncate font-mono">Whisper STT</span>
+              <span className="text-slate-300 truncate font-mono text-[11px]">
+                {systemStatus?.whisper?.mode === "local"
+                  ? `Whisper (${systemStatus?.whisper?.model || "local"})`
+                  : "Whisper STT"}
+              </span>
             </div>
             {whisperOk ? (
               <div className="flex items-center gap-1 text-emerald-400 font-medium shrink-0">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                 <span>Ready</span>
+              </div>
+            ) : (systemStatus?.whisper?.local?.installing_env || systemStatus?.whisper?.local?.downloading) ? (
+              <div className="flex items-center gap-1 text-cyan-400 font-medium shrink-0 animate-pulse">
+                <span>Setup...</span>
               </div>
             ) : (
               <div className="flex items-center gap-1 text-rose-400 font-medium shrink-0">

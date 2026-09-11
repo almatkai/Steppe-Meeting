@@ -15,6 +15,7 @@ import { SteppeIcon } from "../ui/SteppeIcon";
 import type { ProtocolData } from "../../types";
 import { api } from "../../services/api";
 import { useMeetingStore } from "../../store/useMeetingStore";
+import { downloadMeetingProtocol } from "../../utils/fileDownload";
 
 interface ProtocolViewProps {
   meetingId: string;
@@ -37,6 +38,7 @@ export const ProtocolView: React.FC<ProtocolViewProps> = ({
 }) => {
   const [lang, setLang] = useState<"ru" | "kz">("ru");
   const [copied, setCopied] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   // Floating AI edit toolbar state
   const [selectedText, setSelectedText] = useState("");
@@ -120,8 +122,15 @@ export const ProtocolView: React.FC<ProtocolViewProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const downloadDocx = () => {
-    window.open(api.getExportDocxUrl(meetingId, lang), "_blank");
+  const downloadDocx = async () => {
+    try {
+      setIsExporting(true);
+      await downloadMeetingProtocol(meetingId, lang, meetingTitle);
+    } catch {
+      // Toast notification already shown
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const rawTopics = (activeProtocol as any)?.agenda_items || activeProtocol?.topics || [];
@@ -167,10 +176,15 @@ export const ProtocolView: React.FC<ProtocolViewProps> = ({
           <button
             type="button"
             onClick={downloadDocx}
-            className="flex items-center gap-1.5 py-2 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-all shadow-md shadow-indigo-600/20"
+            disabled={isExporting}
+            className="flex items-center gap-1.5 py-2 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-medium transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Скачать DOCX</span>
+            {isExporting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            <span>{isExporting ? "Экспорт..." : "Скачать DOCX"}</span>
           </button>
 
           <button

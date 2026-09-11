@@ -7,6 +7,7 @@ import { HistoryView } from "./components/history/HistoryView";
 import { SettingsView } from "./components/settings/SettingsView";
 import { GlobalChatView } from "./components/chat/GlobalChatView";
 import { useMeetingStore } from "./store/useMeetingStore";
+import { Toaster } from "sonner";
 
 export const App: React.FC = () => {
   const { currentView, loadMeetings, checkStatus } = useMeetingStore();
@@ -18,6 +19,7 @@ export const App: React.FC = () => {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans">
+      <Toaster position="bottom-right" richColors theme="dark" closeButton />
       {/* Sidebar */}
       <AppSidebar />
 

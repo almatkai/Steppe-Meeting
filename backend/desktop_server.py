@@ -7,15 +7,19 @@ and local Ollama / OpenAI-compatible LLM endpoints.
 import asyncio
 from contextlib import contextmanager
 import json
+import io
 import logging
 import os
+import re
 import sqlite3
+import subprocess
 import sys
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import urllib.parse
 
 import httpx
 import uvicorn
@@ -42,7 +46,7 @@ DB_PATH = DATA_DIR / "meetings.db"
 
 # Import local engine modules
 from engine.config import settings
-from engine import chunking, docx_template, docx_preview, template_generation, template_protocol, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever
+from engine import chunking, docx_template, docx_preview, template_generation, template_protocol, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
 
 # LLM telemetry is runtime data too, not a repo-relative directory.
 settings.LLM_LOG_DIR = str(DATA_DIR / "logs" / "llm")
@@ -272,14 +276,22 @@ def set_setting(key: str, value: str):
 DEFAULT_LLM_URL = os.environ.get("LLM_BASE_URL") or get_setting("llm_base_url", "http://localhost:11434/v1")
 DEFAULT_LLM_MODEL = os.environ.get("LLM_MODEL") or get_setting("llm_model", "qwen2.5:latest")
 DEFAULT_LLM_KEY = os.environ.get("LLM_API_KEY") or get_setting("llm_api_key", "")
+DEFAULT_WHISPER_MODE = os.environ.get("WHISPER_MODE") or get_setting("whisper_mode", "local")
+DEFAULT_WHISPER_LOCAL_MODEL = os.environ.get("WHISPER_LOCAL_MODEL") or get_setting("whisper_local_model", "small")
+DEFAULT_WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE") or get_setting("whisper_device", "auto")
 DEFAULT_WHISPER_URL = os.environ.get("WHISPER_BASE_URL") or get_setting("whisper_base_url", "http://localhost:8000/v1")
 DEFAULT_WHISPER_MODEL = os.environ.get("WHISPER_MODEL") or get_setting("whisper_model", "whisper-1")
+DEFAULT_WHISPER_KEY = os.environ.get("WHISPER_API_KEY") or get_setting("whisper_api_key", "")
 
 set_setting("llm_base_url", DEFAULT_LLM_URL)
 set_setting("llm_model", DEFAULT_LLM_MODEL)
 set_setting("llm_api_key", DEFAULT_LLM_KEY)
+set_setting("whisper_mode", DEFAULT_WHISPER_MODE)
+set_setting("whisper_local_model", DEFAULT_WHISPER_LOCAL_MODEL)
+set_setting("whisper_device", DEFAULT_WHISPER_DEVICE)
 set_setting("whisper_base_url", DEFAULT_WHISPER_URL)
 set_setting("whisper_model", DEFAULT_WHISPER_MODEL)
+set_setting("whisper_api_key", DEFAULT_WHISPER_KEY)
 
 def get_chat_completions_url(base_url: str) -> str:
     """Normalizes any provider base URL to the /chat/completions endpoint."""
@@ -380,8 +392,15 @@ class SystemConfigRequest(BaseModel):
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
     llm_api_key: Optional[str] = None
+    whisper_mode: Optional[str] = None
+    whisper_local_model: Optional[str] = None
+    whisper_device: Optional[str] = None
     whisper_base_url: Optional[str] = None
     whisper_model: Optional[str] = None
+    whisper_api_key: Optional[str] = None
+
+class WhisperModelActionRequest(BaseModel):
+    model: str
 
 class ChatMessage(BaseModel):
     role: str
@@ -473,75 +492,101 @@ async def transcribe_meeting(meeting_id: str, background_tasks: BackgroundTasks)
 
 async def run_transcription(meeting_id: str, audio_path: str):
     logger.info("Starting transcription for meeting %s with audio %s", meeting_id, audio_path)
-    whisper_url = get_setting("whisper_base_url", "http://localhost:8000/v1").rstrip("/")
-    whisper_model = get_setting("whisper_model", "whisper-1")
+    whisper_mode = get_setting("whisper_mode", "local")
 
     try:
-        url = f"{whisper_url}/audio/transcriptions"
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            with open(audio_path, "rb") as f:
-                files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
-                data = {
-                    "model": whisper_model,
-                    "response_format": "verbose_json",
-                }
-                resp = await client.post(url, files=files, data=data)
+        with get_db() as conn:
+            m_row = conn.execute("SELECT source_language FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
+            source_lang = m_row["source_language"] if m_row else "multi"
 
-            if resp.status_code != 200:
+        if whisper_mode == "local":
+            whisper_local_model = get_setting("whisper_local_model", "small")
+            whisper_device = get_setting("whisper_device", "auto")
+            logger.info("Using local Whisper model '%s' (device: %s)...", whisper_local_model, whisper_device)
+
+            transcribe_res = await asyncio.to_thread(
+                whisper_service.transcribe_local,
+                audio_path=audio_path,
+                model_name=whisper_local_model,
+                device=whisper_device,
+                language=source_lang,
+            )
+
+            formatted_transcript = transcribe_res["text"]
+            segments = transcribe_res["segments"]
+            total_duration = transcribe_res["duration"]
+
+        else:
+            whisper_url = get_setting("whisper_base_url", "http://localhost:8000/v1").rstrip("/")
+            whisper_model = get_setting("whisper_model", "whisper-1")
+            whisper_key = get_setting("whisper_api_key", "").strip()
+            auth_headers = get_auth_headers(whisper_key)
+
+            url = f"{whisper_url}/audio/transcriptions"
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 with open(audio_path, "rb") as f:
                     files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
-                    data = {"model": whisper_model}
-                    resp = await client.post(url, files=files, data=data)
+                    data = {
+                        "model": whisper_model,
+                        "response_format": "verbose_json",
+                    }
+                    resp = await client.post(url, headers=auth_headers, files=files, data=data)
 
-            if resp.status_code != 200:
-                raise Exception(f"Whisper server returned HTTP {resp.status_code}: {resp.text[:300]}")
+                if resp.status_code != 200:
+                    with open(audio_path, "rb") as f:
+                        files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
+                        data = {"model": whisper_model}
+                        resp = await client.post(url, headers=auth_headers, files=files, data=data)
 
-            result = resp.json()
+                if resp.status_code != 200:
+                    raise Exception(f"Whisper server returned HTTP {resp.status_code}: {resp.text[:300]}")
 
-        segments = []
-        raw_text = result.get("text", "")
+                result = resp.json()
 
-        if "segments" in result and isinstance(result["segments"], list):
-            for idx, s in enumerate(result["segments"]):
-                start = float(s.get("start", 0) or 0)
-                end = float(s.get("end", 0) or 0)
-                start_str = time.strftime("%H:%M:%S", time.gmtime(max(0.0, start)))
-                speaker = s.get("speaker") or f"Спикер {(idx % 3) + 1}"
-                text = s.get("text", "").strip()
-                segments.append({
-                    "index": idx,
-                    "speaker": speaker,
-                    "text": text,
-                    "timestamp_start": start,
-                    "timestamp_end": end,
-                    "timestamp_str": f"[{start_str}]",
-                })
-        else:
-            lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
-            if not lines:
-                lines = [raw_text]
-            for idx, line in enumerate(lines):
-                segments.append({
-                    "index": idx,
-                    "speaker": f"Спикер {(idx % 2) + 1}",
-                    "text": line,
-                    "timestamp_start": idx * 10.0,
-                    "timestamp_end": (idx + 1) * 10.0,
-                    "timestamp_str": f"[{time.strftime('%H:%M:%S', time.gmtime(idx * 10))}]",
-                })
+            segments = []
+            raw_text = result.get("text", "")
 
-        formatted_transcript = "\n".join(
-            f"[{s['speaker']}] {s['timestamp_str']}\n{s['text']}\n" for s in segments
-        ) or raw_text
+            if "segments" in result and isinstance(result["segments"], list):
+                for idx, s in enumerate(result["segments"]):
+                    start = float(s.get("start", 0) or 0)
+                    end = float(s.get("end", 0) or 0)
+                    start_str = time.strftime("%H:%M:%S", time.gmtime(max(0.0, start)))
+                    speaker = s.get("speaker") or f"Спикер {(idx % 3) + 1}"
+                    text = s.get("text", "").strip()
+                    segments.append({
+                        "index": idx,
+                        "speaker": speaker,
+                        "text": text,
+                        "timestamp_start": round(start, 2),
+                        "timestamp_end": round(end, 2),
+                        "timestamp_str": f"[{start_str}]",
+                    })
+            else:
+                lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
+                if not lines:
+                    lines = [raw_text]
+                for idx, line in enumerate(lines):
+                    segments.append({
+                        "index": idx,
+                        "speaker": f"Спикер {(idx % 2) + 1}",
+                        "text": line,
+                        "timestamp_start": round(idx * 10.0, 2),
+                        "timestamp_end": round((idx + 1) * 10.0, 2),
+                        "timestamp_str": f"[{time.strftime('%H:%M:%S', time.gmtime(idx * 10))}]",
+                    })
 
-        total_duration = 0.0
-        if result.get("duration"):
-            try:
-                total_duration = float(result["duration"])
-            except (ValueError, TypeError):
-                pass
-        if not total_duration and segments:
-            total_duration = max((float(s.get("timestamp_end", 0) or 0) for s in segments), default=0.0)
+            formatted_transcript = "\n".join(
+                f"[{s['speaker']}] {s['timestamp_str']}\n{s['text']}\n" for s in segments
+            ) or raw_text
+
+            total_duration = 0.0
+            if result.get("duration"):
+                try:
+                    total_duration = float(result["duration"])
+                except (ValueError, TypeError):
+                    pass
+            if not total_duration and segments:
+                total_duration = max((float(s.get("timestamp_end", 0) or 0) for s in segments), default=0.0)
 
         with get_db() as conn:
             conn.execute("""
@@ -551,7 +596,7 @@ async def run_transcription(meeting_id: str, audio_path: str):
             """, (formatted_transcript, json.dumps(segments, ensure_ascii=False), total_duration, meeting_id))
             conn.commit()
 
-        logger.info("Transcription completed for meeting %s (%d segments)", meeting_id, len(segments))
+        logger.info("Transcription completed for meeting %s (%d segments, duration: %.1fs)", meeting_id, len(segments), total_duration)
 
     except Exception as e:
         logger.exception("Transcription failed for meeting %s: %s", meeting_id, e)
@@ -1608,20 +1653,21 @@ async def edit_text(req: EditRequest):
         return {"edited_text": edited}
 
 # ---------------------------------------------------------------------------
-# DOCX Export
+# DOCX Export & File Actions
 # ---------------------------------------------------------------------------
 
-@app.get("/api/v1/meetings/{meeting_id}/export/docx")
-async def export_docx(
+def _build_meeting_docx(
     meeting_id: str,
-    lang: str = Query("ru", pattern="^(ru|kz)$"),
-    template_id: Optional[str] = Query(None),
-    mode: Optional[str] = Query(None),
-):
+    lang: str = "ru",
+    template_id: Optional[str] = None,
+    mode: Optional[str] = None,
+) -> tuple[bytes, str]:
     with get_db() as conn:
         row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Meeting not found")
+
+    title = row["title"] or "Совещание"
 
     # If custom template requested or attached to meeting
     effective_tpl_id = template_id or (row["template_id"] if "template_id" in row.keys() else None)
@@ -1661,19 +1707,11 @@ async def export_docx(
                 tpl_values.update({k: v for k, v in mock_vals.items() if k not in tpl_values or not tpl_values[k]})
                 rendered_bytes = docx_template.render_docx_template(tpl_bytes, tpl_values, slots=parsed_tpl.slots)
 
-            filename = f"Protocol_{row['title'][:30]}_{lang}.docx".replace(" ", "_")
-            return Response(
-                content=rendered_bytes,
-                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-            )
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Meeting not found")
+            return rendered_bytes, title
 
+    # Standard docx generation fallback
     import docx
-    from docx.shared import Inches, Pt, RGBColor
+    from docx.shared import Pt
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     doc = docx.Document()
@@ -1683,8 +1721,6 @@ async def export_docx(
         protocol_data = json.loads(raw_protocol)
     except Exception:
         protocol_data = {}
-
-    title = row["title"]
 
     # Header
     title_p = doc.add_paragraph()
@@ -1696,14 +1732,15 @@ async def export_docx(
     # Date
     date_p = doc.add_paragraph()
     date_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    date_p.add_run(f"Күні / Дата: {row['created_at'][:10]}")
+    created_date = (row['created_at'] or "")[:10]
+    date_p.add_run(f"Күні / Дата: {created_date}")
 
     # Agenda
     doc.add_heading("Повестка дня / Күн тәртібі", level=2)
     agenda_text = row["agenda"] or protocol_data.get("metadata", {}).get("agenda", "Вопросы рабочего совещания")
     doc.add_paragraph(agenda_text)
 
-    # Participants (supports both object dicts and strings)
+    # Participants
     doc.add_heading("Присутствовали / Қатысқандар", level=2)
     protocol_participants = protocol_data.get("participants")
     if protocol_participants and isinstance(protocol_participants, list):
@@ -1725,7 +1762,7 @@ async def export_docx(
     else:
         doc.add_paragraph("Согласно списку участников")
 
-    # Decisions / Topics (supports both agenda_items and topics)
+    # Decisions / Topics
     doc.add_heading("Решения и поручения / Шешімдер", level=2)
     raw_topics = protocol_data.get("agenda_items") or protocol_data.get("topics") or []
     if raw_topics:
@@ -1761,14 +1798,187 @@ async def export_docx(
         if summary_data.get("executive_summary"):
             doc.add_paragraph(summary_data["executive_summary"])
 
-    export_path = EXPORTS_DIR / f"{meeting_id}_{lang}.docx"
-    doc.save(str(export_path))
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue(), title
 
-    return FileResponse(
-        path=str(export_path),
-        filename=f"Protocol_{meeting_id[:8]}_{lang}.docx",
+
+@app.get("/api/v1/meetings/{meeting_id}/export/docx")
+async def export_docx(
+    meeting_id: str,
+    lang: str = Query("ru", pattern="^(ru|kz)$"),
+    template_id: Optional[str] = Query(None),
+    mode: Optional[str] = Query(None),
+):
+    docx_bytes, title = _build_meeting_docx(meeting_id, lang=lang, template_id=template_id, mode=mode)
+
+    export_path = EXPORTS_DIR / f"{meeting_id}_{lang}.docx"
+    export_path.write_bytes(docx_bytes)
+
+    clean_title = re.sub(r'[/\\?%*:|"<>]+', '-', title).strip() or f"meeting_{meeting_id[:8]}"
+    prefix = "Хаттама" if lang == "kz" else "Протокол"
+    lang_tag = "KZ" if lang == "kz" else "RU"
+    utf8_filename = f"{prefix} - {clean_title} ({lang_tag}).docx"
+    ascii_fallback = f"Protocol_{meeting_id[:8]}_{lang}.docx"
+    quoted_filename = urllib.parse.quote(utf8_filename)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quoted_filename}'
+    }
+    return Response(
+        content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers,
     )
+
+
+class SaveExportRequest(BaseModel):
+    lang: str = "ru"
+    template_id: Optional[str] = None
+    open_folder: bool = True
+    open_file: bool = False
+
+
+@app.post("/api/v1/meetings/{meeting_id}/export/docx/save")
+async def save_docx_to_downloads(
+    meeting_id: str,
+    req: SaveExportRequest = SaveExportRequest(),
+):
+    docx_bytes, title = _build_meeting_docx(meeting_id, lang=req.lang, template_id=req.template_id)
+
+    # Save cached copy
+    cached_path = EXPORTS_DIR / f"{meeting_id}_{req.lang}.docx"
+    cached_path.write_bytes(docx_bytes)
+
+    clean_title = re.sub(r'[/\\?%*:|"<>]+', '-', title).strip() or f"meeting_{meeting_id[:8]}"
+    prefix = "Хаттама" if req.lang == "kz" else "Протокол"
+    lang_tag = "KZ" if req.lang == "kz" else "RU"
+    base_name = f"{prefix} - {clean_title} ({lang_tag})"
+
+    downloads_dir = Path.home() / "Downloads"
+    if not downloads_dir.exists():
+        try:
+            downloads_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            downloads_dir = EXPORTS_DIR
+
+    final_filename = f"{base_name}.docx"
+    target_path = downloads_dir / final_filename
+    counter = 1
+    while target_path.exists():
+        final_filename = f"{base_name} ({counter}).docx"
+        target_path = downloads_dir / final_filename
+        counter += 1
+
+    target_path.write_bytes(docx_bytes)
+
+    if req.open_file:
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(target_path)])
+            elif sys.platform == "win32":
+                os.startfile(str(target_path))
+            else:
+                subprocess.Popen(["xdg-open", str(target_path)])
+        except Exception as e:
+            logger.warning("Failed to open file: %s", e)
+    elif req.open_folder:
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(target_path)])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", f"/select,{str(target_path)}"])
+            else:
+                subprocess.Popen(["xdg-open", str(downloads_dir)])
+        except Exception as e:
+            logger.warning("Failed to reveal file in folder: %s", e)
+
+    return {
+        "success": True,
+        "filename": final_filename,
+        "path": str(target_path),
+    }
+
+
+class SystemFileActionRequest(BaseModel):
+    path: str
+
+
+@app.post("/api/v1/system/open-file")
+async def system_open_file(req: SystemFileActionRequest):
+    file_path = Path(req.path).expanduser().resolve()
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(file_path)])
+        elif sys.platform == "win32":
+            os.startfile(str(file_path))
+        else:
+            subprocess.Popen(["xdg-open", str(file_path)])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to open file: {e}")
+    return {"success": True}
+
+
+@app.post("/api/v1/system/reveal-file")
+async def system_reveal_file(req: SystemFileActionRequest):
+    file_path = Path(req.path).expanduser().resolve()
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(file_path)])
+        elif sys.platform == "win32":
+            subprocess.Popen(["explorer", f"/select,{str(file_path)}"])
+        else:
+            subprocess.Popen(["xdg-open", str(file_path.parent)])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reveal file: {e}")
+    return {"success": True}
+
+
+class SaveFileUrlRequest(BaseModel):
+    url: str
+    filename: str
+    open_folder: bool = True
+
+
+@app.post("/api/v1/system/save-url-to-downloads")
+async def system_save_url_to_downloads(req: SaveFileUrlRequest):
+    downloads_dir = Path.home() / "Downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+
+    clean_filename = re.sub(r'[/\\?%*:|"<>]+', '-', req.filename).strip()
+    target_path = downloads_dir / clean_filename
+    base, ext = os.path.splitext(clean_filename)
+    counter = 1
+    while target_path.exists():
+        target_path = downloads_dir / f"{base} ({counter}){ext}"
+        counter += 1
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(req.url, follow_redirects=True)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail="Failed to fetch file content")
+        target_path.write_bytes(resp.content)
+
+    if req.open_folder:
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(target_path)])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", f"/select,{str(target_path)}"])
+            else:
+                subprocess.Popen(["xdg-open", str(downloads_dir)])
+        except Exception as e:
+            logger.warning("Failed to reveal file: %s", e)
+
+    return {
+        "success": True,
+        "filename": target_path.name,
+        "path": str(target_path),
+    }
 
 # ---------------------------------------------------------------------------
 # Diagnostics & System Endpoints
@@ -1829,18 +2039,52 @@ async def system_status():
                 else:
                     ollama_err = f"Модель '{current_model}' не скачана в Ollama. Выполните: `ollama pull {current_model}` (доступные: {', '.join(ollama_models)})"
 
+    whisper_mode = get_setting("whisper_mode", "local")
+    whisper_url = get_setting("whisper_base_url", "http://localhost:8000/v1").rstrip("/")
+    whisper_key = get_setting("whisper_api_key", "").strip()
+    whisper_local_model = get_setting("whisper_local_model", "small")
+    whisper_ext_model = get_setting("whisper_model", "whisper-1")
+
     whisper_ok = False
     whisper_err = ""
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"{whisper_url}/models")
-            if resp.status_code == 200:
-                whisper_ok = True
-            else:
-                whisper_ok = False
-                whisper_err = f"Эндпоинт вернул код {resp.status_code}"
-    except Exception as e:
-        whisper_err = str(e)
+
+    if whisper_mode == "local":
+        env_installed = whisper_service.is_env_installed()
+        models_avail = whisper_service.get_available_models()
+        model_ready = env_installed and (whisper_local_model in models_avail)
+        whisper_ok = model_ready
+        if not env_installed:
+            whisper_err = "Рабочая среда faster-whisper не установлена. Нажмите «Установить» в настройках."
+        elif not model_ready:
+            whisper_err = f"Модель '{whisper_local_model}' не скачана. Нажмите «Скачать» в настройках."
+    else:
+        auth_hdrs = get_auth_headers(whisper_key)
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(f"{whisper_url}/models", headers=auth_hdrs)
+                if resp.status_code == 200:
+                    whisper_ok = True
+                elif resp.status_code in (401, 403):
+                    whisper_err = f"Ошибка авторизации ({resp.status_code}): проверьте Bearer-токен Whisper"
+                else:
+                    whisper_err = f"Эндпоинт вернул код {resp.status_code}"
+        except Exception as e:
+            whisper_err = str(e)
+
+    whisper_status_obj = {
+        "connected": whisper_ok,
+        "mode": whisper_mode,
+        "url": whisper_url,
+        "model": whisper_local_model if whisper_mode == "local" else whisper_ext_model,
+        "error": whisper_err,
+        "local": whisper_service.get_whisper_full_status(
+            active_mode=whisper_mode,
+            external_url=whisper_url,
+            external_model=whisper_ext_model,
+            external_key=whisper_key,
+            local_model_name=whisper_local_model,
+        )["local"],
+    }
 
     return {
         "ollama": {
@@ -1852,13 +2096,38 @@ async def system_status():
             "available_models": ollama_models,
             "error": ollama_err,
         },
-        "whisper": {
-            "connected": whisper_ok,
-            "url": whisper_url,
-            "model": get_setting("whisper_model"),
-            "error": whisper_err,
-        },
+        "whisper": whisper_status_obj,
     }
+
+@app.get("/api/v1/system/whisper/status")
+async def get_whisper_status():
+    whisper_mode = get_setting("whisper_mode", "local")
+    whisper_local_model = get_setting("whisper_local_model", "small")
+    whisper_url = get_setting("whisper_base_url", "http://localhost:8000/v1").rstrip("/")
+    whisper_model = get_setting("whisper_model", "whisper-1")
+    whisper_key = get_setting("whisper_api_key", "").strip()
+    return whisper_service.get_whisper_full_status(
+        active_mode=whisper_mode,
+        external_url=whisper_url,
+        external_model=whisper_model,
+        external_key=whisper_key,
+        local_model_name=whisper_local_model,
+    )
+
+@app.post("/api/v1/system/whisper/install-env")
+async def install_whisper_env():
+    return whisper_service.start_install_env()
+
+@app.post("/api/v1/system/whisper/download-model")
+async def download_whisper_model(req: WhisperModelActionRequest):
+    try:
+        return whisper_service.start_download_model(req.model)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/v1/system/whisper/delete-model")
+async def delete_whisper_model(req: WhisperModelActionRequest):
+    return whisper_service.delete_downloaded_model(req.model)
 
 @app.get("/api/v1/system/models")
 async def list_models():
@@ -1923,8 +2192,12 @@ async def get_config():
         "llm_base_url": get_setting("llm_base_url", "http://localhost:11434/v1"),
         "llm_model": get_setting("llm_model", "qwen2.5:latest"),
         "llm_api_key": get_setting("llm_api_key", ""),
+        "whisper_mode": get_setting("whisper_mode", "local"),
+        "whisper_local_model": get_setting("whisper_local_model", "small"),
+        "whisper_device": get_setting("whisper_device", "auto"),
         "whisper_base_url": get_setting("whisper_base_url", "http://localhost:8000/v1"),
         "whisper_model": get_setting("whisper_model", "whisper-1"),
+        "whisper_api_key": get_setting("whisper_api_key", ""),
     }
 
 @app.post("/api/v1/system/config")
@@ -1935,10 +2208,18 @@ async def save_config(req: SystemConfigRequest):
         set_setting("llm_model", req.llm_model.strip())
     if req.llm_api_key is not None:
         set_setting("llm_api_key", req.llm_api_key.strip())
+    if req.whisper_mode is not None:
+        set_setting("whisper_mode", req.whisper_mode.strip())
+    if req.whisper_local_model is not None:
+        set_setting("whisper_local_model", req.whisper_local_model.strip())
+    if req.whisper_device is not None:
+        set_setting("whisper_device", req.whisper_device.strip())
     if req.whisper_base_url is not None:
         set_setting("whisper_base_url", req.whisper_base_url.strip())
     if req.whisper_model is not None:
         set_setting("whisper_model", req.whisper_model.strip())
+    if req.whisper_api_key is not None:
+        set_setting("whisper_api_key", req.whisper_api_key.strip())
     sync_generation_settings()
     return {"success": True}
 

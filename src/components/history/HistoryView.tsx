@@ -12,6 +12,7 @@ import {
 import { useMeetingStore } from "../../store/useMeetingStore";
 import { api } from "../../services/api";
 import { formatDate } from "../../lib/utils";
+import { downloadMeetingProtocol } from "../../utils/fileDownload";
 
 export const HistoryView: React.FC = () => {
   const { meetings, loadMeetings, selectMeeting, deleteMeeting, isLoading } = useMeetingStore();
@@ -106,9 +107,9 @@ export const HistoryView: React.FC = () => {
                 {m.status === "completed" && (
                   <button
                     type="button"
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       e.stopPropagation();
-                      window.open(api.getExportDocxUrl(m.id, "ru"), "_blank");
+                      await downloadMeetingProtocol(m.id, "ru", m.title);
                     }}
                     className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
                     title="Скачать DOCX"

@@ -184,12 +184,114 @@ export const api = {
     return res.json();
   },
 
+  // Whisper STT Management
+  async getWhisperStatus(): Promise<any> {
+    const res = await fetch(`${API_BASE}/system/whisper/status`);
+    if (!res.ok) throw new Error(`Failed to get Whisper status: ${res.statusText}`);
+    return res.json();
+  },
+
+  async installWhisperEnv(): Promise<{ status: string; message: string }> {
+    const res = await fetch(`${API_BASE}/system/whisper/install-env`, {
+      method: "POST",
+    });
+    if (!res.ok) throw new Error(`Failed to start Whisper env install: ${res.statusText}`);
+    return res.json();
+  },
+
+  async downloadWhisperModel(model: string): Promise<{ status: string; message: string }> {
+    const res = await fetch(`${API_BASE}/system/whisper/download-model`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Ошибка скачивания модели");
+    }
+    return res.json();
+  },
+
+  async deleteWhisperModel(model: string): Promise<{ status: string; model: string }> {
+    const res = await fetch(`${API_BASE}/system/whisper/delete-model`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Ошибка удаления модели");
+    }
+    return res.json();
+  },
+
   // DOCX Export URL
   getExportDocxUrl(meetingId: string, lang: "ru" | "kz" = "ru", templateId?: string, mode?: string): string {
     let url = `${API_BASE}/meetings/${meetingId}/export/docx?lang=${lang}`;
     if (templateId) url += `&template_id=${encodeURIComponent(templateId)}`;
     if (mode) url += `&mode=${encodeURIComponent(mode)}`;
     return url;
+  },
+
+  async saveExportDocx(
+    meetingId: string,
+    lang: "ru" | "kz" = "ru",
+    options?: { openFolder?: boolean; openFile?: boolean; templateId?: string }
+  ): Promise<{ success: boolean; filename: string; path: string }> {
+    const res = await fetch(`${API_BASE}/meetings/${meetingId}/export/docx/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lang,
+        template_id: options?.templateId,
+        open_folder: options?.openFolder ?? true,
+        open_file: options?.openFile ?? false,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Не удалось экспортировать протокол");
+    }
+    return res.json();
+  },
+
+  async openSystemFile(path: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/system/open-file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Не удалось открыть файл");
+    }
+    return res.json();
+  },
+
+  async revealSystemFile(path: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/system/reveal-file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Не удалось показать файл");
+    }
+    return res.json();
+  },
+
+  async saveUrlToDownloads(url: string, filename: string, openFolder = true): Promise<{ success: boolean; filename: string; path: string }> {
+    const res = await fetch(`${API_BASE}/system/save-url-to-downloads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, filename, open_folder: openFolder }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Не удалось сохранить файл");
+    }
+    return res.json();
   },
 
   // Protocol Templates Management
