@@ -107,10 +107,24 @@ pub fn stop_native_recording(state: State<'_, RecorderState>) -> Result<String, 
 
     let path_str = recording.output_path.to_string_lossy().to_string();
 
-    // Verify file exists
-    if !Path::new(&path_str).exists() {
-        return Err("Recorded file was not created".to_string());
+    // Give macOS AVAssetWriter up to 3 seconds to finalize writing the file
+    let start_wait = std::time::Instant::now();
+    let mut file_ready = false;
+    while start_wait.elapsed() < std::time::Duration::from_secs(3) {
+        if let Ok(metadata) = std::fs::metadata(&recording.output_path) {
+            if metadata.len() > 0 {
+                file_ready = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+
+    if !file_ready && !Path::new(&path_str).exists() {
+        return Err("Recorded file was not created or is empty".to_string());
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(150));
 
     Ok(path_str)
 }

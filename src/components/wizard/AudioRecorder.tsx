@@ -20,7 +20,9 @@ interface AudioRecorderProps {
 const checkIsTauri = () => {
   return (
     typeof window !== "undefined" &&
-    (Boolean((window as any).__TAURI_INTERNALS__) || Boolean((window as any).__TAURI__))
+    (Boolean((window as any).isTauri) ||
+      Boolean((window as any).__TAURI_INTERNALS__) ||
+      Boolean((window as any).__TAURI__))
   );
 };
 
@@ -287,7 +289,8 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
     // OPTION A: NATIVE TAURI / RUST ScreenCaptureKit RECORDING
     // No browser picker dialog, records system audio directly!
     // -------------------------------------------------------------
-    if (isTauri) {
+    const isRunningInTauri = isTauri || checkIsTauri();
+    if (isRunningInTauri) {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke<string>("start_native_recording", {
@@ -321,14 +324,19 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
       } catch (nativeErr: any) {
         console.error("Native recording error:", nativeErr);
         const errString = String(nativeErr);
-        if (errString.includes("permission") || errString.includes("Screen Recording") || errString.includes("-3801")) {
+        if (
+          errString.includes("permission") ||
+          errString.includes("Screen Recording") ||
+          errString.includes("-3801") ||
+          errString.includes("shareable content")
+        ) {
           setError(
             "Для нативной записи системного звука откройте: «Системные настройки» -> «Конфиденциальность и безопасность» -> «Запись экрана и системного аудио» и разрешите Steppe Meeting."
           );
-          return;
+        } else {
+          setError(`Ошибка нативной записи звука: ${errString}`);
         }
-        // Fall through to web recording if native failed
-        console.warn("Falling back to web recording:", nativeErr);
+        return;
       }
     }
 
@@ -549,8 +557,8 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
         const { invoke } = await import("@tauri-apps/api/core");
         const recordedPath = await invoke<string>("stop_native_recording");
-        const fileBytes = await invoke<number[]>("read_recording_file", { path: recordedPath });
-        const uint8Array = new Uint8Array(fileBytes);
+        const fileBytes = await invoke<any>("read_recording_file", { path: recordedPath });
+        const uint8Array = fileBytes instanceof Uint8Array ? fileBytes : new Uint8Array(fileBytes);
         const blob = new Blob([uint8Array], { type: "video/mp4" });
         const file = new File(
           [blob],
@@ -689,13 +697,13 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
             <div className="p-3 rounded-xl bg-indigo-950/30 border border-indigo-500/25 text-xs text-indigo-200/90 flex items-start gap-2.5 leading-relaxed">
               <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
               <span>
-                {isTauri ? (
+                {(isTauri || checkIsTauri()) ? (
                   <>
                     <strong>Нативный режим macOS (Rust):</strong> захват звука системы и микрофона выполняется напрямую через Apple ScreenCaptureKit без диалогов шеринга экрана.
                   </>
                 ) : (
                   <>
-                    <strong>Запись звука системы:</strong> в верхней панели выберите синюю кнопку <em>«Поделиться всем экраном»</em> (не выбирайте отдельное окно).
+                    <strong>Внимание:</strong> открыто в браузере. Для записи системного звука без диалогов шеринга экрана используйте настольное приложение <strong>Steppe Meeting</strong>.
                   </>
                 )}
               </span>

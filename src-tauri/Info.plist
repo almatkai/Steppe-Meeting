@@ -4,5 +4,7 @@
 <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>Steppe Meeting требуется доступ к микрофону для записи аудио совещаний.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Steppe Meeting требуется доступ к системному аудио для записи звука встреч.</string>
 </dict>
 </plist>
