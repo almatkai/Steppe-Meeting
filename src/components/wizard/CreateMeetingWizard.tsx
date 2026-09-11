@@ -16,6 +16,7 @@ import {
   FileVideo,
   Trash2,
   Sparkles,
+  LayoutTemplate,
 } from "lucide-react";
 import { SteppeIcon } from "../ui/SteppeIcon";
 import { AudioDropZone } from "./AudioDropZone";
@@ -24,7 +25,7 @@ import { ParticipantsInput } from "./ParticipantsInput";
 import { AgendaInput } from "./AgendaInput";
 import { api } from "../../services/api";
 import { useMeetingStore } from "../../store/useMeetingStore";
-import type { Participant } from "../../types";
+import type { Participant, ProtocolTemplate } from "../../types";
 
 export const CreateMeetingWizard: React.FC = () => {
   const { selectMeeting, loadMeetings } = useMeetingStore();
@@ -38,6 +39,9 @@ export const CreateMeetingWizard: React.FC = () => {
   const [sourceLanguage, setSourceLanguage] = useState("multi");
   const [agenda, setAgenda] = useState("");
   const [participants, setParticipants] = useState<Participant[]>([]);
+  const [templates, setTemplates] = useState<ProtocolTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templatesError, setTemplatesError] = useState(false);
 
   // Step 3: Transcript state
   const [transcriptText, setTranscriptText] = useState("");
@@ -49,6 +53,21 @@ export const CreateMeetingWizard: React.FC = () => {
 
   // Polling ref to cancel on unmount if needed
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Load custom protocol templates for Step 2 selector
+  const loadWizardTemplates = () => {
+    setTemplatesError(false);
+    api.listTemplates()
+      .then((list) => setTemplates(list.filter((t) => t.id !== "default-protocol-template")))
+      .catch(() => {
+        setTemplates([]);
+        setTemplatesError(true);
+      });
+  };
+
+  useEffect(() => {
+    loadWizardTemplates();
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -107,6 +126,7 @@ export const CreateMeetingWizard: React.FC = () => {
           agenda: agenda.trim(),
           participants,
           transcript_text: "",
+          template_id: selectedTemplateId || "",
         });
         meetingId = created.id;
         setDraftMeetingId(meetingId);
@@ -117,6 +137,7 @@ export const CreateMeetingWizard: React.FC = () => {
           source_language: sourceLanguage,
           agenda: agenda.trim(),
           participants,
+          template_id: selectedTemplateId || "",
         });
       }
 
@@ -195,6 +216,7 @@ export const CreateMeetingWizard: React.FC = () => {
           agenda: agenda.trim(),
           participants,
           transcript_text: transcriptText.trim(),
+          template_id: selectedTemplateId || "",
         });
       } else {
         setSubmitStep("Создание записи совещания...");
@@ -204,6 +226,7 @@ export const CreateMeetingWizard: React.FC = () => {
           agenda: agenda.trim(),
           participants,
           transcript_text: transcriptText.trim(),
+          template_id: selectedTemplateId || "",
         });
         meetingId = created.id;
       }
@@ -449,6 +472,44 @@ export const CreateMeetingWizard: React.FC = () => {
           </div>
 
           <AgendaInput agenda={agenda} onChange={setAgenda} />
+
+          {/* Protocol template selector */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+              <LayoutTemplate className="w-3.5 h-3.5 text-violet-400" />
+              <span>Шаблон протокола</span>
+              {templatesError ? (
+                <button
+                  type="button"
+                  onClick={loadWizardTemplates}
+                  className="text-[11px] text-rose-300 underline font-normal"
+                >
+                  не удалось загрузить — повторить
+                </button>
+              ) : templates.length === 0 && (
+                <span className="text-[11px] text-slate-500 font-normal">
+                  — кастомных нет, загрузите в Настройки AI → Шаблоны
+                </span>
+              )}
+            </label>
+            <select
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+              className="w-full py-2.5 px-3 text-sm rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-indigo-500 transition-colors font-medium"
+            >
+              <option value="">Стандартный протокол (по умолчанию)</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} • {t.slots_count} полей
+                </option>
+              ))}
+            </select>
+            {selectedTemplateId && (
+              <p className="text-[11px] text-violet-300/80">
+                Значения полей шаблона сгенерирует LLM, экспорт DOCX — по вашему .docx.
+              </p>
+            )}
+          </div>
 
           <ParticipantsInput
             participants={participants}

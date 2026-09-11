@@ -30,15 +30,10 @@ venv/
 *.egg-info/
 .pytest_cache/
 
-# Local databases, media, and export files
-backend/data/*.db
-backend/data/*.db-journal
-backend/data/audio/*
-!backend/data/audio/.gitkeep
-backend/data/exports/*
-!backend/data/exports/.gitkeep
-backend/data/logs/*
-!backend/data/logs/.gitkeep
+# Runtime data: databases (including WAL/SHM), uploads, templates, exports, logs
+/backend/data/**
+!/backend/data/**/
+!/backend/data/**/.gitkeep
 
 # Environment and sensitive files
 .env

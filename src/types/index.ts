@@ -84,6 +84,9 @@ export interface Meeting {
   summary_ru: SummaryData;
   summary_kz: SummaryData;
   error_message?: string;
+  template_id?: string;
+  template_values_ru?: Record<string, any>;
+  template_values_kz?: Record<string, any>;
 }
 
 export interface SystemStatus {
@@ -141,3 +144,44 @@ export interface ChatSession {
   last_message?: string | null;
 }
 
+export interface ProtocolTemplateSlot {
+  key: string;
+  label: string;
+  value_type: 'string' | 'text' | 'date' | 'list[string]' | 'list[object]';
+  required?: boolean;
+  source?: string;
+  locations?: string[];
+  raw_markers?: string[];
+  repeat?: {
+    kind: string;
+    columns?: Array<{ key: string; label: string; cell?: number }>;
+    levels?: number;
+    original_count?: number;
+  } | null;
+  omit_when_empty?: boolean;
+  inline?: boolean;
+}
+
+export interface ProtocolTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  additional_prompt?: string;
+  detail_level?: 'concise' | 'standard' | 'detailed';
+  status?: string;
+  docx_path?: string;
+  source_docx_path?: string;
+  slots: ProtocolTemplateSlot[];
+  slots_count: number;
+  render_ready: number | boolean;
+  has_test_docx: boolean;
+  test_values?: Record<string, any>;
+  created_at: string;
+}
+
+export interface TemplateTestResult {
+  template_id: string;
+  values: Record<string, any>;
+  slots_filled: number;
+  has_test_docx: boolean;
+}

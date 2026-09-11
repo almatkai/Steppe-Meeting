@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { api } from "../../services/api";
 import { useMeetingStore } from "../../store/useMeetingStore";
+import { TemplateManager } from "../templates/TemplateManager";
 import type { SystemConfig, SystemStatus } from "../../types";
 
 interface ProviderPreset {
@@ -389,6 +390,9 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Protocol Templates Section */}
+      <TemplateManager />
 
       {/* Save Action Bar */}
       <div className="flex items-center justify-between p-4 rounded-xl bg-slate-900 border border-slate-800">

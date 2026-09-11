@@ -1675,12 +1675,17 @@ def validate_template_values(slots: list[Slot], values: dict[str, Any]) -> None:
         elif slot.value_type == 'list[object]':
             columns = slot.repeat.get('columns', []) if slot.repeat else []
             expected_columns = {column['key'] for column in columns}
-            valid = isinstance(value, list) and all(
-                isinstance(item, dict)
-                and set(item) == expected_columns
-                and all(isinstance(item[key], str) for key in expected_columns)
-                for item in value
-            )
+            if expected_columns:
+                valid = isinstance(value, list) and all(
+                    isinstance(item, dict)
+                    and set(item) == expected_columns
+                    and all(isinstance(item[key], str) for key in expected_columns)
+                    for item in value
+                )
+            else:
+                valid = isinstance(value, list) and all(
+                    isinstance(item, (dict, str)) for item in value
+                )
             if not valid:
                 raise ValueError(
                     f"Template value '{slot.key}' must be a list of row objects"
@@ -1715,7 +1720,7 @@ def _loop_iterables(docx_bytes: bytes) -> set[str]:
         r'\{%[-+]?\s*(?:p|tr|tc|r)?\s*for\s+\w+\s+in\s+([^%}]+?)\s*[-+]?%\}',
         xml,
     ):
-        name = re.match(r'[A-Za-z_][A-Za-z0-9_]*', match.group(1).strip())
+        name = re.match(r'\w+', match.group(1).strip())
         if name:
             iterables.add(name.group(0))
     return iterables

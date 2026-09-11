@@ -1,4 +1,4 @@
-import type { Meeting, Participant, SystemConfig, SystemStatus, ChatSession, ChatMessage, Citation } from "../types";
+import type { Meeting, Participant, SystemConfig, SystemStatus, ChatSession, ChatMessage, Citation, ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../types";
 
 const API_BASE = "http://127.0.0.1:8008/api/v1";
 
@@ -23,6 +23,7 @@ export const api = {
     agenda?: string;
     participants?: Participant[];
     transcript_text?: string;
+    template_id?: string;
   }): Promise<{ id: string; status: string; created_at: string }> {
     const res = await fetch(`${API_BASE}/meetings/create`, {
       method: "POST",
@@ -60,7 +61,7 @@ export const api = {
     return res.json();
   },
 
-  async updateMeeting(meetingId: string, data: Partial<Meeting>): Promise<any> {
+  async updateMeeting(meetingId: string, data: Partial<Meeting> & { template_id?: string }): Promise<any> {
     const res = await fetch(`${API_BASE}/meetings/${meetingId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -184,8 +185,86 @@ export const api = {
   },
 
   // DOCX Export URL
-  getExportDocxUrl(meetingId: string, lang: "ru" | "kz" = "ru"): string {
-    return `${API_BASE}/meetings/${meetingId}/export/docx?lang=${lang}`;
+  getExportDocxUrl(meetingId: string, lang: "ru" | "kz" = "ru", templateId?: string, mode?: string): string {
+    let url = `${API_BASE}/meetings/${meetingId}/export/docx?lang=${lang}`;
+    if (templateId) url += `&template_id=${encodeURIComponent(templateId)}`;
+    if (mode) url += `&mode=${encodeURIComponent(mode)}`;
+    return url;
+  },
+
+  // Protocol Templates Management
+  async listTemplates(): Promise<ProtocolTemplate[]> {
+    const res = await fetch(`${API_BASE}/templates`);
+    if (!res.ok) throw new Error(`Failed to list templates: ${res.statusText}`);
+    return res.json();
+  },
+
+  async getTemplate(id: string): Promise<ProtocolTemplate> {
+    const res = await fetch(`${API_BASE}/templates/${id}`);
+    if (!res.ok) throw new Error(`Failed to get template: ${res.statusText}`);
+    return res.json();
+  },
+
+  async previewTemplateSlots(file: File): Promise<{ slots: ProtocolTemplateSlot[]; render_ready: boolean; stats: any; warnings: string[] }> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch(`${API_BASE}/templates/parse-preview`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Ошибка проверки шаблона");
+    }
+    return res.json();
+  },
+
+  async uploadTemplate(formData: FormData): Promise<{ id: string; name: string; slots_count: number; render_ready: boolean; created_at: string }> {
+    const res = await fetch(`${API_BASE}/templates/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Ошибка загрузки шаблона");
+    }
+    return res.json();
+  },
+
+  async deleteTemplate(id: string): Promise<{ success: boolean; detached_meetings?: number }> {
+    const res = await fetch(`${API_BASE}/templates/${id}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Ошибка удаления шаблона");
+    }
+    return res.json();
+  },
+
+  async testTemplate(id: string, data?: { transcript?: string; detail_level?: string }): Promise<TemplateTestResult> {
+    const res = await fetch(`${API_BASE}/templates/${id}/test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data || {}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Ошибка тестирования шаблона");
+    }
+    return res.json();
+  },
+
+  getTemplateDownloadUrl(id: string, variant: "working" | "source" = "working"): string {
+    return `${API_BASE}/templates/${id}/download?variant=${variant}`;
+  },
+
+  getTestDocxDownloadUrl(id: string): string {
+    return `${API_BASE}/templates/${id}/test-download`;
+  },
+
+  getSampleTemplateDownloadUrl(): string {
+    return `${API_BASE}/templates/sample/download`;
   },
 
   // Multi-Turn RAG Chat Sessions & Search

@@ -13,13 +13,13 @@ import sqlite3
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -29,18 +29,23 @@ BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-# Ensure required local data directories
-DATA_DIR = BASE_DIR / "data"
+# Keep all writable runtime data outside the source tree / application bundle.
+# Existing backend/data contents are copied once for backward compatibility.
+from app_data import prepare_app_data_dir
+
+LEGACY_DATA_DIR = BASE_DIR / "data"
+DATA_DIR = prepare_app_data_dir(LEGACY_DATA_DIR)
 AUDIO_DIR = DATA_DIR / "audio"
 EXPORTS_DIR = DATA_DIR / "exports"
+TEMPLATES_DIR = DATA_DIR / "templates"
 DB_PATH = DATA_DIR / "meetings.db"
-
-AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Import local engine modules
 from engine.config import settings
-from engine import chunking, docx_template, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever
+from engine import chunking, docx_template, docx_preview, template_generation, template_protocol, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever
+
+# LLM telemetry is runtime data too, not a repo-relative directory.
+settings.LLM_LOG_DIR = str(DATA_DIR / "logs" / "llm")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("steppe.desktop")
@@ -107,10 +112,151 @@ def init_db():
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)")
+
+        # Protocol Templates table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS protocol_templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                additional_prompt TEXT DEFAULT '',
+                detail_level TEXT DEFAULT 'concise',
+                status TEXT DEFAULT 'approved',
+                docx_path TEXT NOT NULL,
+                source_docx_path TEXT NOT NULL,
+                slots TEXT NOT NULL,
+                schema_json TEXT NOT NULL,
+                style_config TEXT NOT NULL,
+                template_profile TEXT DEFAULT '{}',
+                render_ready INTEGER DEFAULT 0,
+                test_values TEXT DEFAULT '{}',
+                test_docx_path TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        # Upgrade meetings table for templates
+        for col, col_type in [
+            ("template_id", "TEXT DEFAULT ''"),
+            ("template_values_ru", "TEXT DEFAULT '{}'"),
+            ("template_values_kz", "TEXT DEFAULT '{}'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE meetings ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass
+
         conn.commit()
         vector_store.ensure_schema(conn)
 
+
+def migrate_stored_paths() -> None:
+    """Point absolute paths in a migrated database at the new app data root."""
+    legacy_prefix = str(LEGACY_DATA_DIR.resolve())
+    data_prefix = str(DATA_DIR.resolve())
+    if legacy_prefix == data_prefix:
+        return
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE meetings SET audio_path = REPLACE(audio_path, ?, ?) "
+            "WHERE audio_path LIKE ?",
+            (legacy_prefix, data_prefix, f"{legacy_prefix}%"),
+        )
+        for column in ("docx_path", "source_docx_path", "test_docx_path"):
+            conn.execute(
+                f"UPDATE protocol_templates SET {column} = REPLACE({column}, ?, ?) "
+                f"WHERE {column} LIKE ?",
+                (legacy_prefix, data_prefix, f"{legacy_prefix}%"),
+            )
+        conn.commit()
+
+
 init_db()
+migrate_stored_paths()
+
+def seed_default_template():
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM protocol_templates WHERE id = ?",
+            ("default-protocol-template",),
+        ).fetchone()
+        if row:
+            return
+
+        candidate_paths = [
+            BASE_DIR.parent / "public" / "templates" / "ideal-protocol-template.docx",
+            BASE_DIR.parent.parent / "jynalys" / "jinalys-new-admin-frontend" / "public" / "templates" / "ideal-protocol-template.docx",
+        ]
+        sample_path = None
+        for p in candidate_paths:
+            if p.exists():
+                sample_path = p
+                break
+
+        if not sample_path:
+            return
+
+        try:
+            with open(sample_path, "rb") as f:
+                docx_bytes = f.read()
+
+            source_parsed = docx_template.parse_docx_template(docx_bytes)
+            working_bytes = docx_template.normalize_visual_markers(docx_bytes)
+            parsed = docx_template.parse_docx_template(working_bytes)
+
+            source_slots = {slot.key: slot for slot in source_parsed.slots}
+            loop_iters = docx_template._loop_iterables(working_bytes)
+            for slot in parsed.slots:
+                source_slot = source_slots.get(slot.key)
+                if source_slot and source_slot.source != "placeholder":
+                    slot.label = source_slot.label
+                    slot.value_type = source_slot.value_type
+                    slot.repeat = source_slot.repeat
+                    slot.omit_when_empty = source_slot.omit_when_empty
+                elif slot.key in loop_iters:
+                    slot.value_type = "list[object]"
+
+            name = "Типовой протокол (Стандарт РК)"
+            descriptor = docx_template.parsed_to_descriptor(parsed, name)
+            template_id = "default-protocol-template"
+            target_working = TEMPLATES_DIR / f"{template_id}.docx"
+            target_source = TEMPLATES_DIR / f"{template_id}_source.docx"
+
+            with open(target_working, "wb") as f:
+                f.write(working_bytes)
+            with open(target_source, "wb") as f:
+                f.write(docx_bytes)
+
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute("""
+                INSERT OR REPLACE INTO protocol_templates (
+                    id, name, description, additional_prompt, detail_level, status,
+                    docx_path, source_docx_path, slots, schema_json, style_config,
+                    template_profile, render_ready, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                template_id,
+                name,
+                "Идеальный образец шаблона протокола совещания с таблицами, списком решений и участниками.",
+                "",
+                "concise",
+                "approved",
+                str(target_working),
+                str(target_source),
+                json.dumps(descriptor["slots"], ensure_ascii=False),
+                json.dumps(descriptor["schema_json"], ensure_ascii=False),
+                json.dumps(descriptor["style_config"], ensure_ascii=False),
+                json.dumps({}, ensure_ascii=False),
+                1 if descriptor["render_ready"] else 0,
+                now,
+            ))
+            conn.commit()
+            logger.info("Default protocol template seeded: %s", template_id)
+        except Exception as e:
+            logger.warning("Failed to seed default template: %s", e)
+
+seed_default_template()
 
 def get_setting(key: str, default: str = "") -> str:
     with get_db() as conn:
@@ -212,6 +358,7 @@ class CreateMeetingRequest(BaseModel):
     agenda: Optional[str] = ""
     participants: Optional[List[Dict[str, Any]]] = []
     transcript_text: Optional[str] = ""
+    template_id: Optional[str] = None
 
 class UpdateMeetingRequest(BaseModel):
     title: Optional[str] = None
@@ -223,6 +370,11 @@ class UpdateMeetingRequest(BaseModel):
     protocol_kz: Optional[Dict[str, Any]] = None
     summary_ru: Optional[Dict[str, Any]] = None
     summary_kz: Optional[Dict[str, Any]] = None
+    template_id: Optional[str] = None
+
+class TemplateTestRequest(BaseModel):
+    transcript: Optional[str] = None
+    detail_level: Optional[str] = None
 
 class SystemConfigRequest(BaseModel):
     llm_base_url: Optional[str] = None
@@ -259,8 +411,8 @@ async def create_meeting(req: CreateMeetingRequest):
         conn.execute("""
             INSERT INTO meetings (
                 id, title, created_at, status, source_language, agenda,
-                participants, transcript_text
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                participants, transcript_text, template_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             meeting_id,
             req.title or f"Совещание {datetime.now().strftime('%d.%m.%Y %H:%M')}",
@@ -270,6 +422,7 @@ async def create_meeting(req: CreateMeetingRequest):
             req.agenda or "",
             json.dumps(req.participants or [], ensure_ascii=False),
             req.transcript_text or "",
+            req.template_id or "",
         ))
         conn.commit()
 
@@ -484,6 +637,65 @@ async def run_generation(meeting_id: str):
             ))
             conn.commit()
 
+        # Generate template values if meeting is attached to a template
+        tpl_id = row["template_id"] if "template_id" in row.keys() else ""
+        if tpl_id:
+            try:
+                with get_db() as conn:
+                    tpl_row = conn.execute("SELECT * FROM protocol_templates WHERE id = ?", (tpl_id,)).fetchone()
+                if tpl_row and os.path.exists(tpl_row["docx_path"]):
+                    with open(tpl_row["docx_path"], "rb") as f:
+                        tpl_bytes = f.read()
+                    parsed_tpl = docx_template.parse_docx_template(tpl_bytes)
+                    slots_data = json.loads(tpl_row["slots"] or "[]")
+                    stored_slots_map = {s["key"]: s for s in slots_data}
+                    loop_iters = docx_template._loop_iterables(tpl_bytes)
+                    for s in parsed_tpl.slots:
+                        st = stored_slots_map.get(s.key)
+                        if st:
+                            s.label = st.get("label", s.label)
+                            s.value_type = st.get("value_type", s.value_type)
+                            s.repeat = st.get("repeat", s.repeat)
+                            s.omit_when_empty = st.get("omit_when_empty", s.omit_when_empty)
+                        elif s.key in loop_iters:
+                            s.value_type = "list[object]"
+
+                    logger.info("Generating custom template values for meeting %s with template %s", meeting_id, tpl_id)
+                    protocol_source = template_protocol.build_protocol_source(
+                        protocol_ru, agenda=agenda, participants=participants,
+                    )
+                    transfer_res = await template_generation.generate_protocol_template_values(
+                        parsed_tpl,
+                        tpl_row["additional_prompt"] or "",
+                        transcript_text,
+                        protocol_source=protocol_source,
+                        output_language="Russian",
+                        detail_level=tpl_row["detail_level"] or "concise",
+                    )
+                    tpl_values_ru = transfer_res.get("template_values") or {}
+
+                    try:
+                        tpl_values_kz = await template_generation.translate_template_values(
+                            parsed_tpl, tpl_values_ru, "Kazakh",
+                        )
+                    except Exception as kz_err:
+                        logger.warning("Template values KZ translation error: %s", kz_err)
+                        tpl_values_kz = tpl_values_ru
+
+                    with get_db() as conn:
+                        conn.execute("""
+                            UPDATE meetings
+                            SET template_values_ru = ?, template_values_kz = ?
+                            WHERE id = ?
+                        """, (
+                            json.dumps(tpl_values_ru, ensure_ascii=False),
+                            json.dumps(tpl_values_kz, ensure_ascii=False),
+                            meeting_id,
+                        ))
+                        conn.commit()
+            except Exception as tpl_err:
+                logger.warning("Custom template generation non-fatal error: %s", tpl_err)
+
         logger.info("Meeting generation completed successfully for %s", meeting_id)
 
         # Auto-index into local vector store for RAG
@@ -536,6 +748,9 @@ async def get_meeting(meeting_id: str):
         data["protocol_kz"] = json.loads(data["protocol_kz"] or "{}")
         data["summary_ru"] = json.loads(data["summary_ru"] or "{}")
         data["summary_kz"] = json.loads(data["summary_kz"] or "{}")
+        data["template_values_ru"] = json.loads(data.get("template_values_ru") or "{}")
+        data["template_values_kz"] = json.loads(data.get("template_values_kz") or "{}")
+        data["template_id"] = data.get("template_id") or ""
         return data
 
 @app.patch("/api/v1/meetings/{meeting_id}")
@@ -574,6 +789,9 @@ async def update_meeting(meeting_id: str, req: UpdateMeetingRequest):
         if req.summary_kz is not None:
             updates.append("summary_kz = ?")
             params.append(json.dumps(req.summary_kz, ensure_ascii=False))
+        if req.template_id is not None:
+            updates.append("template_id = ?")
+            params.append(req.template_id)
 
         if updates:
             params.append(meeting_id)
@@ -594,6 +812,510 @@ async def delete_meeting(meeting_id: str):
         conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
         conn.commit()
     return {"success": True}
+
+
+# ---------------------------------------------------------------------------
+# Template Helper Utilities
+# ---------------------------------------------------------------------------
+
+def _mock_template_values(slots: list[Any]) -> dict[str, Any]:
+    """Fallback values generator for previewing/testing templates even when LLM is offline."""
+    values: dict[str, Any] = {}
+    now = datetime.now()
+    for s in slots:
+        key = s.key if hasattr(s, "key") else s.get("key", "")
+        val_type = s.value_type if hasattr(s, "value_type") else s.get("value_type", "string")
+        repeat = s.repeat if hasattr(s, "repeat") else s.get("repeat")
+        label = s.label if hasattr(s, "label") else s.get("label", key)
+
+        if val_type == "date":
+            values[key] = now.strftime("%d.%m.%Y")
+        elif repeat and repeat.get("kind") == "numbered_outline":
+            values[key] = [
+                {"level": "0", "text": "Обсуждение текущих вопросов повестки"},
+                {"level": "0", "text": "Утверждение проектных решений и задач"},
+                {"level": "0", "text": "Назначение контрольных сроков"},
+            ]
+        elif repeat and repeat.get("kind") == "table_rows":
+            cols = [c["key"] for c in repeat.get("columns", [])]
+            row1, row2, row3 = {}, {}, {}
+            for c in cols:
+                row1[c] = "Ахметов Б.С." if "fio" in c else ("Председатель" if "dolzh" in c or "rol" in c else f"Значение {c}")
+                row2[c] = "Калиева Д.С." if "fio" in c else ("Секретарь" if "dolzh" in c or "rol" in c else f"Значение {c}")
+                row3[c] = "Сергеев В.П." if "fio" in c else ("Член комиссии" if "dolzh" in c or "rol" in c else f"Значение {c}")
+            values[key] = [row1, row2, row3]
+        elif val_type == "list[object]":
+            values[key] = [
+                {"фио": "Ахметов Б.С.", "должность": "Председатель правления"},
+                {"фио": "Калиева Д.С.", "должность": "Секретарь"},
+                {"фио": "Сергеев В.П.", "должность": "Технический директор"},
+            ]
+        elif val_type == "list[string]":
+            values[key] = [
+                "1. Утвердить отчет и принять план работ.",
+                "2. Завершить тестирование системы до 15 числа.",
+            ]
+        else:
+            k = key.lower()
+            if "председатель_фио" in k or "predsedatel" in k:
+                values[key] = "Ахметов Б.С."
+            elif "секретарь_фио" in k or "sekretar" in k:
+                values[key] = "Калиева Д.С."
+            elif "председатель_должность" in k:
+                values[key] = "Председатель правления"
+            elif "город" in k or "gorod" in k:
+                values[key] = "Астана"
+            elif "день" in k or "den" in k:
+                values[key] = now.strftime("%d")
+            elif "месяц" in k or "mesyac" in k:
+                months = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+                values[key] = months[now.month - 1]
+            elif "год" in k or "god" in k:
+                values[key] = now.strftime("%y")
+            elif "время" in k or "vremya" in k:
+                values[key] = now.strftime("%H:%M")
+            elif "номер" in k:
+                values[key] = "14-ПР"
+            elif "следующ" in k:
+                values[key] = (now + timedelta(days=30)).strftime("%d.%m.%Y")
+            elif "reshili" in k or "постанов" in k or "реш" in k:
+                values[key] = "1. Одобрить проект решения единогласно. 2. Утвердить план реализации."
+            elif "golosov_za" in k:
+                values[key] = "5"
+            elif "golosov_protiv" in k or "golosov_vozderzhalis" in k:
+                values[key] = "0"
+            elif "mesto" in k or "место" in k:
+                values[key] = "г. Астана, головной офис"
+            elif "povestka" in k or "вопрос" in k:
+                values[key] = "Обсуждение ключевых задач и утверждение плана мероприятий"
+            else:
+                values[key] = f"Заполнено ({label})"
+    return values
+
+
+def _adapt_meeting_to_template_values(slots: list[Any], meeting_row: dict[str, Any], protocol_data: dict[str, Any], lang: str = "ru") -> dict[str, Any]:
+    """Fill template slots from meeting protocol data."""
+    stored_values = meeting_row.get("template_values_kz" if lang == "kz" else "template_values_ru")
+    if stored_values and isinstance(stored_values, str):
+        try:
+            stored_values = json.loads(stored_values)
+        except Exception:
+            stored_values = {}
+    if stored_values and isinstance(stored_values, dict) and len(stored_values) > 0:
+        return stored_values
+
+    # Base values from fallback generator
+    values = _mock_template_values(slots)
+
+    # Enrich from actual meeting metadata and protocol
+    title = meeting_row.get("title", "")
+    created_at_str = meeting_row.get("created_at", "")[:10]
+    agenda = meeting_row.get("agenda", "") or protocol_data.get("metadata", {}).get("agenda", "")
+
+    try:
+        meeting_participants = json.loads(meeting_row.get("participants") or "[]")
+    except Exception:
+        meeting_participants = []
+
+    topics = protocol_data.get("agenda_items") or protocol_data.get("topics") or []
+    all_decisions = []
+    for t in topics:
+        for d in t.get("decisions", []):
+            if isinstance(d, dict):
+                text = d.get("decision", "")
+                resp = d.get("responsible", "")
+                dl = d.get("deadline", "")
+                meta = []
+                if resp: meta.append(f"Отв: {resp}")
+                if dl: meta.append(f"Срок: {dl}")
+                all_decisions.append(f"{text} ({', '.join(meta)})" if meta else text)
+            elif isinstance(d, str):
+                all_decisions.append(d)
+
+    for s in slots:
+        key = s.key if hasattr(s, "key") else s.get("key", "")
+        repeat = s.repeat if hasattr(s, "repeat") else s.get("repeat")
+        k = key.lower()
+
+        if repeat and repeat.get("kind") == "table_rows":
+            cols = [c["key"] for c in repeat.get("columns", [])]
+            if meeting_participants:
+                rows = []
+                for p in meeting_participants:
+                    name = p.get("name", "") if isinstance(p, dict) else str(p)
+                    pos = p.get("position", "") if isinstance(p, dict) else ""
+                    role = p.get("role", "Член комиссии") if isinstance(p, dict) else "Участник"
+                    row_obj = {}
+                    for c in cols:
+                        if "fio" in c: row_obj[c] = name
+                        elif "dolzh" in c: row_obj[c] = pos or "Сотрудник"
+                        elif "rol" in c: row_obj[c] = role
+                        else: row_obj[c] = ""
+                    rows.append(row_obj)
+                values[key] = rows
+
+        elif repeat and repeat.get("kind") == "numbered_outline":
+            if topics:
+                outline_rows = []
+                for t in topics:
+                    t_name = t.get("topic") or t.get("topic_name") or ""
+                    outline_rows.append({"level": "0", "text": t_name})
+                    for dec in t.get("decisions", []):
+                        d_text = dec.get("decision", "") if isinstance(dec, dict) else str(dec)
+                        if d_text:
+                            outline_rows.append({"level": "1", "text": f"Решение: {d_text}"})
+                if outline_rows:
+                    values[key] = outline_rows
+
+        elif k == "участники" or (isinstance(values.get(key), list) and len(values.get(key, [])) > 0 and isinstance(values[key][0], dict) and "фио" in values[key][0]):
+            if meeting_participants:
+                obj_list = []
+                for p in meeting_participants:
+                    p_name = p.get("name", "") if isinstance(p, dict) else str(p)
+                    p_pos = p.get("position", "") if isinstance(p, dict) else "Участник"
+                    obj_list.append({"фио": p_name, "должность": p_pos})
+                values[key] = obj_list
+
+        elif "reshili" in k or "постанов" in k or "реш" in k:
+            if all_decisions:
+                values[key] = "\n".join(f"{i+1}. {d}" for i, d in enumerate(all_decisions))
+        elif "povestka" in k or "вопрос" in k:
+            if agenda:
+                values[key] = agenda
+        elif "title" in k or "наименование" in k:
+            if title:
+                values[key] = title
+
+    return values
+
+
+# ---------------------------------------------------------------------------
+# Protocol Templates Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/templates")
+async def list_templates():
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT id, name, description, additional_prompt, detail_level, status,
+                   slots, render_ready, test_docx_path, created_at
+            FROM protocol_templates
+            ORDER BY created_at DESC
+        """).fetchall()
+
+        result = []
+        for r in rows:
+            data = dict(r)
+            try:
+                data["slots"] = json.loads(data["slots"] or "[]")
+            except Exception:
+                data["slots"] = []
+            data["slots_count"] = len(data["slots"])
+            data["has_test_docx"] = bool(data.get("test_docx_path") and os.path.exists(data["test_docx_path"]))
+            result.append(data)
+        return result
+
+
+@app.get("/api/v1/templates/sample/download")
+async def download_sample_template():
+    candidate_paths = [
+        BASE_DIR.parent / "public" / "templates" / "ideal-protocol-template.docx",
+        BASE_DIR.parent.parent / "jynalys" / "jinalys-new-admin-frontend" / "public" / "templates" / "ideal-protocol-template.docx",
+    ]
+    sample_path = None
+    for p in candidate_paths:
+        if p.exists():
+            sample_path = p
+            break
+    if not sample_path:
+        raise HTTPException(status_code=404, detail="Sample template docx not found")
+    return FileResponse(
+        str(sample_path),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="ideal-protocol-template.docx",
+    )
+
+
+@app.get("/api/v1/templates/{template_id}")
+async def get_template_detail(template_id: str):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM protocol_templates WHERE id = ?", (template_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        data = dict(row)
+        data["slots"] = json.loads(data["slots"] or "[]")
+        data["schema_json"] = json.loads(data["schema_json"] or "{}")
+        data["style_config"] = json.loads(data["style_config"] or "{}")
+        data["template_profile"] = json.loads(data["template_profile"] or "{}")
+        data["test_values"] = json.loads(data.get("test_values") or "{}")
+        data["has_test_docx"] = bool(data.get("test_docx_path") and os.path.exists(data["test_docx_path"]))
+        return data
+
+
+@app.post("/api/v1/templates/parse-preview")
+async def preview_template_slots(file: UploadFile = File(...)):
+    """Validate and parse an uploaded docx without saving it."""
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Размер файла превышает лимит 50 МБ")
+
+    try:
+        source_parsed = docx_template.parse_docx_template(content)
+        working_bytes = docx_template.normalize_visual_markers(content)
+        parsed = docx_template.parse_docx_template(working_bytes)
+
+        source_slots = {slot.key: slot for slot in source_parsed.slots}
+        loop_iters = docx_template._loop_iterables(working_bytes)
+        for slot in parsed.slots:
+            source_slot = source_slots.get(slot.key)
+            if source_slot and source_slot.source != "placeholder":
+                slot.label = source_slot.label
+                slot.value_type = source_slot.value_type
+                slot.repeat = source_slot.repeat
+                slot.omit_when_empty = source_slot.omit_when_empty
+            elif slot.key in loop_iters:
+                slot.value_type = "list[object]"
+
+        name = Path(file.filename or "template").stem
+        descriptor = docx_template.parsed_to_descriptor(parsed, name)
+        return {
+            "slots": descriptor["slots"],
+            "render_ready": descriptor["render_ready"],
+            "stats": descriptor["stats"],
+            "warnings": descriptor["warnings"],
+        }
+    except Exception as e:
+        logger.exception("Parse preview failed: %s", e)
+        raise HTTPException(status_code=400, detail=f"Ошибка разбора DOCX: {e}")
+
+
+@app.post("/api/v1/templates/upload")
+async def upload_template(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    description: Optional[str] = Form(""),
+    additional_prompt: Optional[str] = Form(""),
+    detail_level: Optional[str] = Form("concise"),
+):
+    docx_bytes = await file.read()
+    if len(docx_bytes) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Размер файла превышает лимит 50 МБ")
+
+    try:
+        source_parsed = docx_template.parse_docx_template(docx_bytes)
+        if not source_parsed.slots:
+            raise HTTPException(
+                status_code=400,
+                detail="В документе не найдены поля для заполнения. Используйте {{ field_name }}, линии ___ или инструкции [в скобках]."
+            )
+        working_bytes = docx_template.normalize_visual_markers(docx_bytes)
+        parsed = docx_template.parse_docx_template(working_bytes)
+
+        source_slots = {slot.key: slot for slot in source_parsed.slots}
+        loop_iters = docx_template._loop_iterables(working_bytes)
+        for slot in parsed.slots:
+            source_slot = source_slots.get(slot.key)
+            if source_slot and source_slot.source != "placeholder":
+                slot.label = source_slot.label
+                slot.value_type = source_slot.value_type
+                slot.repeat = source_slot.repeat
+                slot.omit_when_empty = source_slot.omit_when_empty
+            elif slot.key in loop_iters:
+                slot.value_type = "list[object]"
+
+        descriptor = docx_template.parsed_to_descriptor(parsed, name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("DOCX parsing error: %s", e)
+        raise HTTPException(status_code=400, detail=f"Ошибка обработки DOCX: {e}")
+
+    template_id = str(uuid.uuid4())
+    working_path = TEMPLATES_DIR / f"{template_id}.docx"
+    source_path = TEMPLATES_DIR / f"{template_id}_source.docx"
+
+    with open(working_path, "wb") as f:
+        f.write(working_bytes)
+    with open(source_path, "wb") as f:
+        f.write(docx_bytes)
+
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO protocol_templates (
+                id, name, description, additional_prompt, detail_level, status,
+                docx_path, source_docx_path, slots, schema_json, style_config,
+                template_profile, render_ready, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            template_id,
+            name.strip() or "Пользовательский шаблон",
+            (description or "").strip(),
+            (additional_prompt or "").strip(),
+            (detail_level or "concise").strip(),
+            "approved",
+            str(working_path),
+            str(source_path),
+            json.dumps(descriptor["slots"], ensure_ascii=False),
+            json.dumps(descriptor["schema_json"], ensure_ascii=False),
+            json.dumps(descriptor["style_config"], ensure_ascii=False),
+            json.dumps({}, ensure_ascii=False),
+            1 if descriptor["render_ready"] else 0,
+            now,
+        ))
+        conn.commit()
+
+    return {
+        "id": template_id,
+        "name": name,
+        "slots_count": len(descriptor["slots"]),
+        "render_ready": descriptor["render_ready"],
+        "created_at": now,
+    }
+
+
+@app.delete("/api/v1/templates/{template_id}")
+async def delete_template(template_id: str):
+    if template_id == "default-protocol-template":
+        raise HTTPException(status_code=403, detail="Системный шаблон удалять нельзя")
+    with get_db() as conn:
+        row = conn.execute("SELECT docx_path, source_docx_path, test_docx_path FROM protocol_templates WHERE id = ?", (template_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        # Detach meetings bound to this template so export falls back to standard protocol
+        detached = 0
+        try:
+            cnt_row = conn.execute("SELECT COUNT(*) AS cnt FROM meetings WHERE template_id = ?", (template_id,)).fetchone()
+            detached = int(cnt_row["cnt"]) if cnt_row else 0
+            if detached:
+                conn.execute("UPDATE meetings SET template_id = '' WHERE template_id = ?", (template_id,))
+        except Exception:
+            # meetings.template_id column may be missing on very old DBs; deletion still proceeds
+            logger.warning("Could not detach meetings from template %s", template_id)
+            detached = 0
+
+        for p in [row["docx_path"], row["source_docx_path"], row["test_docx_path"]]:
+            if p and os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+
+        conn.execute("DELETE FROM protocol_templates WHERE id = ?", (template_id,))
+        conn.commit()
+    return {"success": True, "detached_meetings": detached}
+
+
+@app.get("/api/v1/templates/{template_id}/download")
+async def download_template_file(template_id: str, variant: str = Query("working", pattern="^(working|source)$")):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM protocol_templates WHERE id = ?", (template_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+    file_path = row["source_docx_path"] if variant == "source" else row["docx_path"]
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File on disk not found")
+
+    safe_name = f"{row['name']}_{variant}.docx"
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=safe_name,
+    )
+
+
+@app.post("/api/v1/templates/{template_id}/test")
+async def test_template_run(template_id: str, req: Optional[TemplateTestRequest] = None):
+    sync_generation_settings()
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM protocol_templates WHERE id = ?", (template_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+    if not os.path.exists(row["docx_path"]):
+        raise HTTPException(status_code=404, detail="Template file not found on disk")
+
+    with open(row["docx_path"], "rb") as f:
+        docx_bytes = f.read()
+
+    parsed = docx_template.parse_docx_template(docx_bytes)
+    slots_data = json.loads(row["slots"] or "[]")
+    # Propagate stored slot metadata
+    stored_slots_map = {s["key"]: s for s in slots_data}
+    loop_iters = docx_template._loop_iterables(docx_bytes)
+    for s in parsed.slots:
+        st = stored_slots_map.get(s.key)
+        if st:
+            s.label = st.get("label", s.label)
+            s.value_type = st.get("value_type", s.value_type)
+            s.repeat = st.get("repeat", s.repeat)
+            s.omit_when_empty = st.get("omit_when_empty", s.omit_when_empty)
+        elif s.key in loop_iters:
+            s.value_type = "list[object]"
+
+    test_transcript = (req.transcript.strip() if req and req.transcript else "") or template_generation.DEFAULT_TEST_TRANSCRIPT
+    dl = (req.detail_level if req and req.detail_level else "") or row["detail_level"] or "concise"
+
+    # Try LLM generation first, fall back to mock values if offline/error
+    try:
+        values = await template_generation.generate_template_values(
+            parsed=parsed,
+            additional_prompt=row["additional_prompt"] or "",
+            transcript=test_transcript,
+            output_language="Russian",
+            detail_level=dl,
+        )
+    except Exception as e:
+        logger.warning("LLM template value generation failed (%s), using mock generator", e)
+        values = _mock_template_values(parsed.slots)
+
+    # Render test docx
+    try:
+        rendered = docx_template.render_docx_template(docx_bytes, values, slots=parsed.slots)
+    except Exception as ren_err:
+        logger.exception("Render test docx error: %s", ren_err)
+        # Ensure values conform
+        fallback_values = _mock_template_values(parsed.slots)
+        values.update({k: v for k, v in fallback_values.items() if k not in values or not values[k]})
+        rendered = docx_template.render_docx_template(docx_bytes, values, slots=parsed.slots)
+
+    test_docx_path = TEMPLATES_DIR / f"{template_id}_test.docx"
+    with open(test_docx_path, "wb") as f:
+        f.write(rendered)
+
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE protocol_templates
+            SET test_values = ?, test_docx_path = ?
+            WHERE id = ?
+        """, (json.dumps(values, ensure_ascii=False), str(test_docx_path), template_id))
+        conn.commit()
+
+    return {
+        "template_id": template_id,
+        "values": values,
+        "slots_filled": len(values),
+        "has_test_docx": True,
+    }
+
+
+@app.get("/api/v1/templates/{template_id}/test-download")
+async def download_template_test_file(template_id: str):
+    with get_db() as conn:
+        row = conn.execute("SELECT name, test_docx_path FROM protocol_templates WHERE id = ?", (template_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+    if not row["test_docx_path"] or not os.path.exists(row["test_docx_path"]):
+        raise HTTPException(status_code=404, detail="Тестовый DOCX еще не сгенерирован. Запустите тестирование.")
+
+    return FileResponse(
+        row["test_docx_path"],
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=f"test_{row['name']}.docx",
+    )
+
 
 # ---------------------------------------------------------------------------
 # AI Assistant & Chat Endpoints
@@ -890,7 +1612,61 @@ async def edit_text(req: EditRequest):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/v1/meetings/{meeting_id}/export/docx")
-async def export_docx(meeting_id: str, lang: str = Query("ru", pattern="^(ru|kz)$")):
+async def export_docx(
+    meeting_id: str,
+    lang: str = Query("ru", pattern="^(ru|kz)$"),
+    template_id: Optional[str] = Query(None),
+    mode: Optional[str] = Query(None),
+):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+    # If custom template requested or attached to meeting
+    effective_tpl_id = template_id or (row["template_id"] if "template_id" in row.keys() else None)
+    if mode != "standard" and effective_tpl_id:
+        with get_db() as conn:
+            tpl_row = conn.execute("SELECT * FROM protocol_templates WHERE id = ?", (effective_tpl_id,)).fetchone()
+        if tpl_row and os.path.exists(tpl_row["docx_path"]):
+            with open(tpl_row["docx_path"], "rb") as f:
+                tpl_bytes = f.read()
+
+            parsed_tpl = docx_template.parse_docx_template(tpl_bytes)
+            slots_data = json.loads(tpl_row["slots"] or "[]")
+            stored_slots_map = {s["key"]: s for s in slots_data}
+            loop_iters = docx_template._loop_iterables(tpl_bytes)
+            for s in parsed_tpl.slots:
+                st = stored_slots_map.get(s.key)
+                if st:
+                    s.label = st.get("label", s.label)
+                    s.value_type = st.get("value_type", s.value_type)
+                    s.repeat = st.get("repeat", s.repeat)
+                    s.omit_when_empty = st.get("omit_when_empty", s.omit_when_empty)
+                elif s.key in loop_iters:
+                    s.value_type = "list[object]"
+
+            raw_proto = (row["protocol_kz"] if lang == "kz" else row["protocol_ru"]) or "{}"
+            try:
+                protocol_data = json.loads(raw_proto)
+            except Exception:
+                protocol_data = {}
+
+            tpl_values = _adapt_meeting_to_template_values(parsed_tpl.slots, dict(row), protocol_data, lang=lang)
+            try:
+                rendered_bytes = docx_template.render_docx_template(tpl_bytes, tpl_values, slots=parsed_tpl.slots)
+            except Exception as ren_e:
+                logger.warning("Render template with adapted values failed (%s), retrying with mock fallback", ren_e)
+                mock_vals = _mock_template_values(parsed_tpl.slots)
+                tpl_values.update({k: v for k, v in mock_vals.items() if k not in tpl_values or not tpl_values[k]})
+                rendered_bytes = docx_template.render_docx_template(tpl_bytes, tpl_values, slots=parsed_tpl.slots)
+
+            filename = f"Protocol_{row['title'][:30]}_{lang}.docx".replace(" ", "_")
+            return Response(
+                content=rendered_bytes,
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+            )
     with get_db() as conn:
         row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
         if not row:

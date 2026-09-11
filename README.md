@@ -9,8 +9,12 @@
 - **Десктопный движок**: [Tauri v2](https://tauri.app) (Rust) + WebKit WebView
 - **Фронтенд**: React 19 + TypeScript + Vite + Tailwind CSS v4 + Radix UI + Lucide/Phosphor Icons + Zustand
 - **Локальный бэкенд**: Автономный FastAPI сервис со встроенным движком генерации протоколов и DOCX (порт 8008)
-- **Локальная база данных**: SQLite (`data/meetings.db`) — без необходимости развертывания PostgreSQL
-- **Локальное хранилище**: Файловая система (`data/audio`, `data/exports`) — без S3/SeaweedFS
+- **Локальная база данных**: SQLite в пользовательской директории приложения — без необходимости развертывания PostgreSQL
+- **Локальное хранилище**: аудио, экспорты, логи и загруженные шаблоны хранятся вне репозитория / `.app`:
+  - macOS: `~/Library/Application Support/Steppe Meeting/`
+  - Windows: `%LOCALAPPDATA%\Steppe Meeting\`
+  - Linux: `${XDG_DATA_HOME:-~/.local/share}/Steppe Meeting/`
+  - для разработки путь можно переопределить через `STEPPE_DATA_DIR`
 - **Модели AI**:
   - **Речь в текст (STT)**: Local Whisper (`http://localhost:8000/v1/audio/transcriptions` или OpenAI-совместимый Whisper)
   - **Генерация протоколов и резюме (LLM)**: Local Ollama (`http://localhost:11434/v1/chat/completions` — Qwen 2.5, Llama 3.2, Mistral и др.)
