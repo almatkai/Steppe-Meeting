@@ -68,7 +68,7 @@ pub fn start_native_recording(
     let recording = SCRecordingOutput::new(&rec_config)
         .ok_or_else(|| "Failed to create SCRecordingOutput on macOS".to_string())?;
 
-    let mut stream = SCStream::new(&filter, &config);
+    let stream = SCStream::new(&filter, &config);
     stream
         .add_recording_output(&recording)
         .map_err(|e| format!("Failed to add recording output: {:?}", e))?;
@@ -113,4 +113,9 @@ pub fn stop_native_recording(state: State<'_, RecorderState>) -> Result<String, 
     }
 
     Ok(path_str)
+}
+
+#[tauri::command]
+pub fn read_recording_file(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&path).map_err(|e| format!("Failed to read recorded file: {}", e))
 }
