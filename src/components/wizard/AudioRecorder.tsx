@@ -10,19 +10,30 @@ import {
   Info,
   Sliders,
   AlertTriangle,
+  Zap,
 } from "lucide-react";
 
 interface AudioRecorderProps {
   onAudioReady: (file: File | null) => void;
 }
 
+const checkIsTauri = () => {
+  return (
+    typeof window !== "undefined" &&
+    (Boolean((window as any).__TAURI_INTERNALS__) || Boolean((window as any).__TAURI__))
+  );
+};
+
 export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) => {
   const [isRecording, setIsRecording] = useState(false);
+  const [isNativeRecording, setIsNativeRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioUrl, setAudioUrl] = useState<string>("");
   const [recordedFile, setRecordedFile] = useState<File | null>(null);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState("");
+
+  const isTauri = checkIsTauri();
 
   // Source selection states
   const [includeMic, setIncludeMic] = useState(true);
@@ -127,40 +138,49 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
           ctx.fillRect(0, 0, width, height);
 
           // State 1: Active Live Recording
-          if (isRecording && analyserRef.current) {
-            const analyser = analyserRef.current;
-            const bufferLength = analyser.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
-            analyser.getByteFrequencyData(dataArray);
+          if (isRecording) {
+            let dataArray: Uint8Array | null = null;
+            let bufferLength = 0;
+
+            if (analyserRef.current) {
+              const analyser = analyserRef.current;
+              bufferLength = analyser.frequencyBinCount;
+              dataArray = new Uint8Array(bufferLength);
+              analyser.getByteFrequencyData(dataArray as any);
+            }
 
             const maxBarHeight = height * 0.85;
 
             for (let i = 0; i < numBars; i++) {
               const x = spacing + i * (barWidth + spacing);
 
-              // Map bar index to frequency range (bins 2 to ~46)
-              const bin = Math.min(
-                bufferLength - 1,
-                Math.floor(Math.pow((i + 1) / numBars, 1.25) * 44) + 2
-              );
-              const rawVal = dataArray[bin] || 0;
+              let rawVal = 0;
+              if (dataArray && bufferLength > 0) {
+                const bin = Math.min(
+                  bufferLength - 1,
+                  Math.floor(Math.pow((i + 1) / numBars, 1.25) * 44) + 2
+                );
+                rawVal = dataArray[bin] || 0;
+              } else {
+                // Synthesize live activity wave for native mode
+                const pulse = Math.sin(time * 0.008 + i * 0.28) * 0.5 + 0.5;
+                const wave2 = Math.cos(time * 0.005 + i * 0.15) * 0.5 + 0.5;
+                rawVal = (pulse * 0.6 + wave2 * 0.4) * 140;
+              }
 
-              // Gentle ambient ripple even when quiet
               const idleRipple = (Math.sin(time * 0.005 + i * 0.35) * 0.5 + 0.5) * 6 + 4;
               const targetHeight = Math.max(idleRipple, (rawVal / 255) * maxBarHeight);
 
-              // Fast attack, smooth spring decay
               const prev = prevBarsRef.current[i] || 4;
               const smoothed = targetHeight > prev ? targetHeight : prev * 0.85 + targetHeight * 0.15;
               prevBarsRef.current[i] = smoothed;
 
               const y = centerY - smoothed / 2;
 
-              // Dynamic vibrant neon gradient
               const gradient = ctx.createLinearGradient(0, y, 0, y + smoothed);
-              gradient.addColorStop(0, "#38bdf8"); // Cyan top
-              gradient.addColorStop(0.5, "#6366f1"); // Indigo center
-              gradient.addColorStop(1, "#a855f7"); // Purple bottom
+              gradient.addColorStop(0, "#38bdf8");
+              gradient.addColorStop(0.5, "#6366f1");
+              gradient.addColorStop(1, "#a855f7");
 
               ctx.save();
               if (rawVal > 35) {
@@ -181,7 +201,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
               const y = centerY - barHeight / 2;
 
               const grad = ctx.createLinearGradient(0, y, 0, y + barHeight);
-              grad.addColorStop(0, "#34d399"); // Emerald
+              grad.addColorStop(0, "#34d399");
               grad.addColorStop(0.6, "#10b981");
               grad.addColorStop(1, "#059669");
 
@@ -263,22 +283,72 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
       return;
     }
 
+    // -------------------------------------------------------------
+    // OPTION A: NATIVE TAURI / RUST ScreenCaptureKit RECORDING
+    // No browser picker dialog, records system audio directly!
+    // -------------------------------------------------------------
+    if (isTauri) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke<string>("start_native_recording", {
+          recordMic: includeMic,
+        });
+
+        setIsNativeRecording(true);
+        setIsRecording(true);
+        setRecordingTime(0);
+        setActiveSources({ mic: includeMic, system: includeSystem });
+
+        // Optional: Also attach mic to visualizer for live wave feedback if mic is enabled
+        if (includeMic && navigator.mediaDevices?.getUserMedia) {
+          try {
+            const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            micStreamRef.current = micStream;
+            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            audioContextRef.current = audioCtx;
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 256;
+            analyserRef.current = analyser;
+            const src = audioCtx.createMediaStreamSource(micStream);
+            src.connect(analyser);
+          } catch (_) {}
+        }
+
+        timerRef.current = setInterval(() => {
+          setRecordingTime((prev) => prev + 1);
+        }, 1000);
+        return;
+      } catch (nativeErr: any) {
+        console.error("Native recording error:", nativeErr);
+        const errString = String(nativeErr);
+        if (errString.includes("permission") || errString.includes("Screen Recording") || errString.includes("-3801")) {
+          setError(
+            "Для нативной записи системного звука откройте: «Системные настройки» -> «Конфиденциальность и безопасность» -> «Запись экрана и системного аудио» и разрешите Steppe Meeting."
+          );
+          return;
+        }
+        // Fall through to web recording if native failed
+        console.warn("Falling back to web recording:", nativeErr);
+      }
+    }
+
+    // -------------------------------------------------------------
+    // OPTION B: WEB FALLBACK (When running in browser outside Tauri)
+    // -------------------------------------------------------------
     let micStream: MediaStream | null = null;
     let displayStream: MediaStream | null = null;
     let micConnected = false;
     let systemConnected = false;
 
     try {
-      // 1. Capture system audio via getDisplayMedia if requested
       if (includeSystem) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
           throw new Error(
-            "Захват системного звука не поддерживается в текущем браузере/окружении. Используйте Google Chrome или Edge."
+            "Захват системного звука не поддерживается в текущем браузере. Запустите нативное приложение Steppe Meeting."
           );
         }
 
         try {
-          // Request display media with system audio
           displayStream = await navigator.mediaDevices.getDisplayMedia({
             video: true,
             audio: true,
@@ -293,24 +363,21 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
             systemConnected = true;
             displayStreamRef.current = displayStream;
 
-            // Turn off video track rendering to save resources
             displayStream.getVideoTracks().forEach((vt) => {
               vt.enabled = false;
               vt.onended = () => {
-                // If user clicks native "Stop sharing", stop recording cleanly
                 if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
                   stopRecording();
                 }
               };
             });
           } else {
-            // User selected window or audio was not attached
             displayStream.getTracks().forEach((t) => t.stop());
             displayStream = null;
 
             if (surface === "window") {
               setError(
-                "На macOS захват звука из отдельного окна заблокирован системой Apple. В верхней панели нажмите синюю кнопку «Поделиться всем экраном» — тогда звук системы запишется."
+                "На macOS захват звука из отдельного окна заблокирован операционной системой. Нажмите в верхней панели синюю кнопку «Поделиться всем экраном»."
               );
             } else {
               setError(
@@ -331,7 +398,6 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         }
       }
 
-      // 2. Capture microphone stream if requested
       if (includeMic) {
         try {
           micStream = await navigator.mediaDevices.getUserMedia({
@@ -357,7 +423,6 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         return;
       }
 
-      // 3. Set up Web Audio API to mix streams
       if (audioContextRef.current) {
         try {
           await audioContextRef.current.close();
@@ -376,7 +441,6 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
       analyser.smoothingTimeConstant = 0.7;
       analyserRef.current = analyser;
 
-      // Connect microphone stream to mixer and analyser
       if (micStream && micStream.getAudioTracks().length > 0) {
         const micSource = audioCtx.createMediaStreamSource(micStream);
         const micGain = audioCtx.createGain();
@@ -386,7 +450,6 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         micGain.connect(analyser);
       }
 
-      // Connect system audio stream to mixer and analyser
       if (displayStream && displayStream.getAudioTracks().length > 0) {
         const sysSource = audioCtx.createMediaStreamSource(displayStream);
         const sysGain = audioCtx.createGain();
@@ -398,7 +461,6 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
       setActiveSources({ mic: micConnected, system: systemConnected });
 
-      // 4. Initialize MediaRecorder with the mixed audio stream
       const mixedStream = destination.stream;
       const mimeType = getSupportedMimeType();
       const options = mimeType ? { mimeType } : undefined;
@@ -437,7 +499,6 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
           setAudioUrl(url);
         }
 
-        // Clean up tracks
         if (micStreamRef.current) {
           micStreamRef.current.getTracks().forEach((track) => track.stop());
           micStreamRef.current = null;
@@ -468,7 +529,50 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
+    if (!isRecording) return;
+
+    // Stop native recording
+    if (isNativeRecording) {
+      try {
+        setIsRecording(false);
+        clearInterval(timerRef.current);
+
+        if (micStreamRef.current) {
+          micStreamRef.current.getTracks().forEach((t) => t.stop());
+          micStreamRef.current = null;
+        }
+        if (audioContextRef.current) {
+          audioContextRef.current.close().catch(() => {});
+          audioContextRef.current = null;
+        }
+
+        const { invoke } = await import("@tauri-apps/api/core");
+        const recordedPath = await invoke<string>("stop_native_recording");
+        const fileBytes = await invoke<number[]>("read_recording_file", { path: recordedPath });
+        const uint8Array = new Uint8Array(fileBytes);
+        const blob = new Blob([uint8Array], { type: "video/mp4" });
+        const file = new File(
+          [blob],
+          `meeting_${new Date().toISOString().replace(/[:.]/g, "-")}.mp4`,
+          { type: "video/mp4" }
+        );
+
+        setRecordedFile(file);
+        onAudioReady(file);
+
+        const url = URL.createObjectURL(blob);
+        setAudioUrl(url);
+        setIsNativeRecording(false);
+      } catch (err: any) {
+        console.error("Stop native recording error:", err);
+        setError("Ошибка остановки нативной записи: " + (err.message || String(err)));
+        setIsNativeRecording(false);
+      }
+      return;
+    }
+
+    // Stop web recording
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
@@ -527,6 +631,12 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
             <div className="text-xs text-slate-300 font-medium flex items-center gap-2">
               <Sliders className="w-4 h-4 text-indigo-400" />
               <span>Источники аудио:</span>
+              {isTauri && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+                  <Zap className="w-3 h-3 text-emerald-400" />
+                  Native Rust Engine
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -574,27 +684,21 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
             </div>
           </div>
 
-          {/* Helpful Guidance Hint for System Audio */}
+          {/* Guidance Info Banner */}
           {includeSystem && (
-            <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 text-xs text-indigo-200/95 space-y-2.5 leading-relaxed">
-              <div className="flex items-center gap-2 font-semibold text-indigo-300">
-                <Info className="w-4 h-4 text-indigo-400 shrink-0" />
-                <span>Запись звука системы на macOS Sequoia:</span>
-              </div>
-              <div className="text-[12px] space-y-1.5 text-slate-300">
-                <p>
-                  1. В появившейся сверху панели нажмите синюю кнопку:{" "}
-                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-600 font-semibold text-white shadow-sm">
-                    Поделиться всем экраном
-                  </span>
-                </p>
-                <p className="text-rose-300">
-                  2. ⚠️ <strong>Не нажимайте «Поделиться этим окном»</strong> — на macOS Apple передает звук только при выборе всего экрана.
-                </p>
-              </div>
-              <p className="text-[10px] text-slate-400 pt-1 border-t border-indigo-500/20">
-                <em>Почему запрашивается доступ к экрану?</em> В macOS системный звук технологически привязан к ScreenCaptureKit. Видеопоток мгновенно глушится, приложение записывает только звук.
-              </p>
+            <div className="p-3 rounded-xl bg-indigo-950/30 border border-indigo-500/25 text-xs text-indigo-200/90 flex items-start gap-2.5 leading-relaxed">
+              <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+              <span>
+                {isTauri ? (
+                  <>
+                    <strong>Нативный режим macOS (Rust):</strong> захват звука системы и микрофона выполняется напрямую через Apple ScreenCaptureKit без диалогов шеринга экрана.
+                  </>
+                ) : (
+                  <>
+                    <strong>Запись звука системы:</strong> в верхней панели выберите синюю кнопку <em>«Поделиться всем экраном»</em> (не выбирайте отдельное окно).
+                  </>
+                )}
+              </span>
             </div>
           )}
         </div>
@@ -616,6 +720,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                   : activeSources.system
                   ? "Звук системы"
                   : "Микрофон"}
+                {isNativeRecording ? " (Native Rust)" : ""}
               </span>
             </div>
           )}
@@ -729,7 +834,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                   </button>
                 </div>
 
-                {/* Native HTML5 Audio Player */}
+                {/* Native HTML5 Audio/Video Player */}
                 {audioUrl && (
                   <audio
                     ref={audioPlayerRef}
