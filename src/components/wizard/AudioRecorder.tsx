@@ -280,21 +280,15 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         try {
           // Request display media with system audio
           displayStream = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-              displaySurface: "monitor",
-            },
-            audio: {
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false,
-              suppressLocalAudioPlayback: false,
-            },
+            video: true,
+            audio: true,
             systemAudio: "include",
-            selfBrowserSurface: "exclude",
-            surfaceSwitching: "include",
           } as any);
 
           const audioTracks = displayStream.getAudioTracks();
+          const videoTrack = displayStream.getVideoTracks()[0];
+          const surface = videoTrack?.getSettings()?.displaySurface;
+
           if (audioTracks.length > 0) {
             systemConnected = true;
             displayStreamRef.current = displayStream;
@@ -310,26 +304,25 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
               };
             });
           } else {
-            // User did not check "Share audio" checkbox in the picker dialog
+            // User selected window or audio was not attached
             displayStream.getTracks().forEach((t) => t.stop());
             displayStream = null;
 
-            if (!includeMic) {
+            if (surface === "window") {
               setError(
-                "Вы не включили галочку «Предоставить доступ к аудиосистемы» («Share audio»). Для записи звука системы повторите попытку и отметьте аудио."
+                "На macOS захват звука из отдельного окна заблокирован системой Apple. В верхней панели нажмите синюю кнопку «Поделиться всем экраном» — тогда звук системы запишется."
               );
-              return;
+            } else {
+              setError(
+                "Аудиодорожка системы не была передана. В верхней панели нажмите синюю кнопку «Поделиться всем экраном»."
+              );
             }
+            return;
           }
         } catch (displayErr: any) {
           if (displayErr.name === "NotAllowedError" || displayErr.name === "AbortError") {
-            if (!includeMic) {
-              setError("Запрос на захват системного звука был отменен.");
-              return;
-            }
-            // User cancelled system sound prompt, inform them
             setError(
-              "Окно выбора системного звука было закрыто. Включите «Предоставить доступ к аудиосистемы» («Share audio») либо оставьте только микрофон."
+              "Выбор был отменен. Чтобы записать звук системы, в верхней панели нажмите «Поделиться всем экраном»."
             );
             return;
           } else {
@@ -583,11 +576,25 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
           {/* Helpful Guidance Hint for System Audio */}
           {includeSystem && (
-            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-indigo-950/25 border border-indigo-500/20 text-xs text-indigo-300/90 leading-relaxed">
-              <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
-              <span>
-                <strong>Запись звонка:</strong> при нажатии <em>«Начать запись»</em> в появившемся окне выберите <em>«Весь экран»</em> или <em>«Вкладка»</em> и обязательно отметьте чекбокс <strong>«Предоставить доступ к аудиосистемы»</strong> (<em>«Share audio»</em>).
-              </span>
+            <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 text-xs text-indigo-200/95 space-y-2.5 leading-relaxed">
+              <div className="flex items-center gap-2 font-semibold text-indigo-300">
+                <Info className="w-4 h-4 text-indigo-400 shrink-0" />
+                <span>Запись звука системы на macOS Sequoia:</span>
+              </div>
+              <div className="text-[12px] space-y-1.5 text-slate-300">
+                <p>
+                  1. В появившейся сверху панели нажмите синюю кнопку:{" "}
+                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-600 font-semibold text-white shadow-sm">
+                    Поделиться всем экраном
+                  </span>
+                </p>
+                <p className="text-rose-300">
+                  2. ⚠️ <strong>Не нажимайте «Поделиться этим окном»</strong> — на macOS Apple передает звук только при выборе всего экрана.
+                </p>
+              </div>
+              <p className="text-[10px] text-slate-400 pt-1 border-t border-indigo-500/20">
+                <em>Почему запрашивается доступ к экрану?</em> В macOS системный звук технологически привязан к ScreenCaptureKit. Видеопоток мгновенно глушится, приложение записывает только звук.
+              </p>
             </div>
           )}
         </div>
