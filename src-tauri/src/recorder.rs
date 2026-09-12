@@ -13,6 +13,21 @@ pub struct ActiveRecording {
 // Global or managed state for recording
 pub struct RecorderState(pub Mutex<Option<ActiveRecording>>);
 
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+#[tauri::command]
+pub fn check_screen_capture_permission() -> bool {
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+#[tauri::command]
+pub fn request_screen_capture_permission() -> bool {
+    unsafe { CGRequestScreenCaptureAccess() }
+}
+
 #[tauri::command]
 pub fn start_native_recording(
     record_mic: bool,
@@ -25,6 +40,11 @@ pub fn start_native_recording(
 
     if lock.is_some() {
         return Err("Recording is already in progress".to_string());
+    }
+
+    // Check permission silently first without triggering macOS prompt
+    if unsafe { !CGPreflightScreenCaptureAccess() } {
+        return Err("PermissionNotGranted".to_string());
     }
 
     // 1. Get displays to capture system audio from the active display
@@ -132,4 +152,28 @@ pub fn stop_native_recording(state: State<'_, RecorderState>) -> Result<String, 
 #[tauri::command]
 pub fn read_recording_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| format!("Failed to read recorded file: {}", e))
+}
+
+#[tauri::command]
+pub fn open_screen_recording_settings() {
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        .spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sc_permission() {
+        match SCShareableContent::get() {
+            Ok(content) => {
+                println!("SUCCESS: found {} displays", content.displays().len());
+            }
+            Err(e) => {
+                println!("FAILED: {:?}", e);
+            }
+        }
+    }
 }

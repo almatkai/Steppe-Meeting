@@ -39,11 +39,31 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
   // Source selection states
   const [includeMic, setIncludeMic] = useState(true);
-  const [includeSystem, setIncludeSystem] = useState(true);
+  const [includeSystem, setIncludeSystem] = useState(false);
+  const [hasSystemAudioPermission, setHasSystemAudioPermission] = useState<boolean | null>(null);
   const [activeSources, setActiveSources] = useState<{ mic: boolean; system: boolean }>({
     mic: true,
-    system: true,
+    system: false,
   });
+
+  useEffect(() => {
+    if (isTauri) {
+      import("@tauri-apps/api/core").then(({ invoke }) => {
+        invoke<boolean>("check_screen_capture_permission")
+          .then((hasPerm) => {
+            setHasSystemAudioPermission(hasPerm);
+            if (hasPerm) {
+              setIncludeSystem(true);
+              setActiveSources({ mic: true, system: true });
+            } else {
+              setIncludeSystem(false);
+              setActiveSources({ mic: true, system: false });
+            }
+          })
+          .catch(() => {});
+      });
+    }
+  }, [isTauri]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -286,13 +306,16 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
     }
 
     // -------------------------------------------------------------
-    // OPTION A: NATIVE TAURI / RUST ScreenCaptureKit RECORDING
-    // No browser picker dialog, records system audio directly!
+    // OPTION A: NATIVE TAURI ScreenCaptureKit (Only when system audio is selected)
     // -------------------------------------------------------------
     const isRunningInTauri = isTauri || checkIsTauri();
-    if (isRunningInTauri) {
+    if (isRunningInTauri && includeSystem) {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
+        const hasPerm = await invoke<boolean>("check_screen_capture_permission");
+        if (!hasPerm) {
+          throw new Error("PermissionNotGranted");
+        }
         await invoke<string>("start_native_recording", {
           recordMic: includeMic,
         });
@@ -300,48 +323,30 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         setIsNativeRecording(true);
         setIsRecording(true);
         setRecordingTime(0);
-        setActiveSources({ mic: includeMic, system: includeSystem });
-
-        // Optional: Also attach mic to visualizer for live wave feedback if mic is enabled
-        if (includeMic && navigator.mediaDevices?.getUserMedia) {
-          try {
-            const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            micStreamRef.current = micStream;
-            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-            audioContextRef.current = audioCtx;
-            const analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 256;
-            analyserRef.current = analyser;
-            const src = audioCtx.createMediaStreamSource(micStream);
-            src.connect(analyser);
-          } catch (_) {}
-        }
+        setActiveSources({ mic: includeMic, system: true });
 
         timerRef.current = setInterval(() => {
           setRecordingTime((prev) => prev + 1);
         }, 1000);
         return;
       } catch (nativeErr: any) {
-        console.error("Native recording error:", nativeErr);
-        const errString = String(nativeErr);
-        if (
-          errString.includes("permission") ||
-          errString.includes("Screen Recording") ||
-          errString.includes("-3801") ||
-          errString.includes("shareable content")
-        ) {
+        console.warn("Native system recording unavailable, falling back to microphone:", nativeErr);
+        if (includeMic) {
           setError(
-            "Для нативной записи системного звука откройте: «Системные настройки» -> «Конфиденциальность и безопасность» -> «Запись экрана и системного аудио» и разрешите Steppe Meeting."
+            "Системный звук не включен в настройках macOS. Запись запущена через ваш микрофон (голос)."
           );
+          // Do NOT return: continue directly to microphone recording below so user is not blocked!
         } else {
-          setError(`Ошибка нативной записи звука: ${errString}`);
+          setError(
+            "Для записи звука системы включите тумблер Steppe Meeting в «Системные настройки» -> «Конфиденциальность и безопасность» -> «Запись экрана и системного звука» и подтвердите «Завершить и перезапустить»."
+          );
+          return;
         }
-        return;
       }
     }
 
     // -------------------------------------------------------------
-    // OPTION B: WEB FALLBACK (When running in browser outside Tauri)
+    // OPTION B: Web fallback / Microphone-only recording
     // -------------------------------------------------------------
     let micStream: MediaStream | null = null;
     let displayStream: MediaStream | null = null;
@@ -349,7 +354,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
     let systemConnected = false;
 
     try {
-      if (includeSystem) {
+      if (includeSystem && !isRunningInTauri) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
           throw new Error(
             "Захват системного звука не поддерживается в текущем браузере. Запустите нативное приложение Steppe Meeting."
@@ -410,8 +415,8 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         try {
           micStream = await navigator.mediaDevices.getUserMedia({
             audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
+              echoCancellation: false,
+              noiseSuppression: false,
               autoGainControl: true,
             },
           });
@@ -452,7 +457,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
       if (micStream && micStream.getAudioTracks().length > 0) {
         const micSource = audioCtx.createMediaStreamSource(micStream);
         const micGain = audioCtx.createGain();
-        micGain.gain.value = 1.0;
+        micGain.gain.value = 1.8; // Software boost for clear, loud voice
         micSource.connect(micGain);
         micGain.connect(destination);
         micGain.connect(analyser);
@@ -621,7 +626,39 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
       {error && (
         <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 text-xs flex items-start gap-2.5">
           <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-          <div className="flex-1 leading-relaxed">{error}</div>
+          <div className="flex-1 leading-relaxed">
+            <div>{error}</div>
+            {error.includes("системн") && (
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIncludeSystem(false);
+                    setIncludeMic(true);
+                    setError("");
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/40 text-xs font-medium cursor-pointer transition-colors flex items-center gap-1.5"
+                >
+                  <Mic className="w-3.5 h-3.5 text-rose-300" />
+                  Записать только голос
+                </button>
+                {(isTauri || checkIsTauri()) && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const { invoke } = await import("@tauri-apps/api/core");
+                        await invoke("open_screen_recording_settings");
+                      } catch (_) {}
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 border border-indigo-500/40 text-xs font-medium cursor-pointer transition-colors flex items-center gap-1.5"
+                  >
+                    ⚙️ Настройки записи звука Mac
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => setError("")}
@@ -670,9 +707,25 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
               {/* System Sound Toggle */}
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   if (includeSystem && !includeMic) return;
-                  setIncludeSystem(!includeSystem);
+                  if (!includeSystem) {
+                    if (isTauri) {
+                      try {
+                        const { invoke } = await import("@tauri-apps/api/core");
+                        const hasPerm = await invoke<boolean>("check_screen_capture_permission");
+                        setHasSystemAudioPermission(hasPerm);
+                        if (!hasPerm) {
+                          await invoke("request_screen_capture_permission");
+                        }
+                      } catch (_) {}
+                    }
+                    setIncludeSystem(true);
+                  } else {
+                    setIncludeSystem(false);
+                    setIncludeMic(true);
+                    setError("");
+                  }
                 }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border ${
                   includeSystem

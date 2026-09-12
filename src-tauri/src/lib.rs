@@ -1,6 +1,10 @@
 mod recorder;
 
-use recorder::{read_recording_file, start_native_recording, stop_native_recording, RecorderState};
+use recorder::{
+    check_screen_capture_permission, open_screen_recording_settings, read_recording_file,
+    request_screen_capture_permission, start_native_recording, stop_native_recording,
+    RecorderState,
+};
 use std::sync::Mutex;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -11,6 +15,9 @@ pub fn run() {
             start_native_recording,
             stop_native_recording,
             read_recording_file,
+            open_screen_recording_settings,
+            check_screen_capture_permission,
+            request_screen_capture_permission,
         ])
         .plugin(tauri_plugin_opener::init())
         .run(tauri::generate_context!())
