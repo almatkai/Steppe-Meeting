@@ -21,6 +21,7 @@ import {
 import { api } from "../../services/api";
 import { useMeetingStore } from "../../store/useMeetingStore";
 import { SteppeIcon, SteppeLogo } from "../ui/SteppeIcon";
+import { MarkdownViewer } from "../ui/MarkdownViewer";
 import type { ChatSession, ChatMessage, Citation } from "../../types";
 
 export const GlobalChatView: React.FC = () => {
@@ -408,7 +409,11 @@ export const GlobalChatView: React.FC = () => {
                             : "bg-slate-900/80 border border-slate-800 text-slate-100 rounded-bl-xs shadow-sm"
                         }`}
                       >
-                        <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
+                        {isUser ? (
+                          <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
+                        ) : (
+                          <MarkdownViewer content={msg.content} />
+                        )}
 
                         {!isUser && (
                           <div className="mt-2 pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-500 select-none">
@@ -490,10 +495,7 @@ export const GlobalChatView: React.FC = () => {
 
                   <div className="flex flex-col gap-2 max-w-[85%] items-start">
                     <div className="rounded-2xl p-4 text-sm leading-relaxed bg-slate-900/80 border border-slate-800 text-slate-100 rounded-bl-xs shadow-sm">
-                      <div className="whitespace-pre-wrap font-sans">
-                        {streamingDelta}
-                        <span className="inline-block w-1.5 h-4 ml-1 bg-indigo-400 animate-pulse align-middle" />
-                      </div>
+                      <MarkdownViewer content={streamingDelta} isStreaming={true} />
                     </div>
 
                     {/* Citations displayed as soon as retrieved */}

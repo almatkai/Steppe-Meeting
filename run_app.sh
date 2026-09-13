@@ -35,19 +35,16 @@ else
     echo "Backend is already running on port 8008."
 fi
 
-# 2. Build frontend dist if not built
-if [ ! -d "$DIR/dist" ]; then
-    echo "Building frontend dist assets..."
-    cd "$DIR" && npx vite build
-fi
-
-# 3. Start local web view host on port 1420 if not running
+# 2. Start local Vite dev server on port 1420 with Hot Module Replacement (HMR)
+# Live reload enabled: no need to run 'npm run build' or 'pnpm build' every day!
 if ! curl -s http://localhost:1420 >/dev/null 2>&1; then
-    echo "Starting local web view host on port 1420..."
+    echo "Starting local Vite dev server on port 1420 (HMR live reload enabled)..."
     cd "$DIR"
-    npx vite preview --port 1420 --host &
+    npx vite --port 1420 --host &
     VITE_PID=$!
-    sleep 1
+    sleep 2
+else
+    echo "Dev server is already running on port 1420."
 fi
 
 # 4. Build Tauri binary if not built

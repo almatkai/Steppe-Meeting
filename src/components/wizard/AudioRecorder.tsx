@@ -676,12 +676,6 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
             <div className="text-xs text-slate-300 font-medium flex items-center gap-2">
               <Sliders className="w-4 h-4 text-indigo-400" />
               <span>Источники аудио:</span>
-              {isTauri && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
-                  <Zap className="w-3 h-3 text-emerald-400" />
-                  Native Rust Engine
-                </span>
-              )}
             </div>
 
             <div className="flex items-center gap-2">

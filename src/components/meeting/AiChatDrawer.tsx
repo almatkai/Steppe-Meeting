@@ -9,6 +9,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { SteppeIcon } from "../ui/SteppeIcon";
+import { MarkdownViewer } from "../ui/MarkdownViewer";
 import { api } from "../../services/api";
 
 interface Message {
@@ -158,20 +159,25 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
                 <Bot className="w-3.5 h-3.5" />
               </div>
             )}
-            <div
-              className={`p-3 rounded-2xl max-w-[82%] leading-relaxed whitespace-pre-wrap ${
-                m.role === "user"
-                  ? "bg-indigo-600 text-white rounded-tr-sm shadow-md"
-                  : "bg-slate-800/80 border border-slate-700/60 text-slate-200 rounded-tl-sm shadow-sm"
-              }`}
-            >
-              {m.content || (isStreaming && idx === messages.length - 1 ? (
-                <span className="inline-flex items-center gap-1 text-slate-400">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  Печатает...
-                </span>
-              ) : null)}
-            </div>
+            {m.role === "user" ? (
+              <div className="p-3 rounded-2xl max-w-[82%] leading-relaxed whitespace-pre-wrap bg-indigo-600 text-white rounded-tr-sm shadow-md">
+                {m.content}
+              </div>
+            ) : (
+              <div className="p-3 rounded-2xl max-w-[82%] leading-relaxed bg-slate-800/80 border border-slate-700/60 text-slate-200 rounded-tl-sm shadow-sm">
+                {m.content ? (
+                  <MarkdownViewer
+                    content={m.content}
+                    isStreaming={isStreaming && idx === messages.length - 1}
+                  />
+                ) : isStreaming && idx === messages.length - 1 ? (
+                  <span className="inline-flex items-center gap-1 text-slate-400">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Печатает...
+                  </span>
+                ) : null}
+              </div>
+            )}
             {m.role === "user" && (
               <div className="w-6 h-6 rounded-md bg-slate-700 flex items-center justify-center text-slate-300 shrink-0 mt-0.5">
                 <User className="w-3.5 h-3.5" />

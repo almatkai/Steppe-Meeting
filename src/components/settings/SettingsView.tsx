@@ -283,7 +283,7 @@ export const SettingsView: React.FC = () => {
   const whisperOk = systemStatus?.whisper?.connected;
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-8">
+    <div className="max-w-5xl mx-auto p-6 space-y-8">
       <div>
         <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
           <Settings className="w-5 h-5 text-indigo-400" />
@@ -494,28 +494,28 @@ export const SettingsView: React.FC = () => {
 
             {config.whisper_mode === "local" ? (
               (whisperDetails?.local?.model_ready ?? (systemStatus?.whisper?.connected && config.whisper_mode === "local")) ? (
-                <span className="flex items-center gap-1.5 text-emerald-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                <span className="flex items-center gap-1.5 text-emerald-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 shrink-0 whitespace-nowrap">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                   <span>Готов (Локально: {config.whisper_local_model || "small"})</span>
                 </span>
               ) : !(whisperDetails?.local?.env_installed ?? systemStatus?.whisper?.local?.env_installed) ? (
-                <span className="flex items-center gap-1 text-rose-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20">
+                <span className="flex items-center gap-1 text-rose-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 shrink-0 whitespace-nowrap">
                   <XCircle className="w-3.5 h-3.5" />
                   <span>Среда не установлена</span>
                 </span>
               ) : (
-                <span className="flex items-center gap-1 text-amber-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20">
+                <span className="flex items-center gap-1 text-amber-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 shrink-0 whitespace-nowrap">
                   <AlertCircle className="w-3.5 h-3.5" />
                   <span>Модель не скачана</span>
                 </span>
               )
             ) : systemStatus?.whisper?.connected ? (
-              <span className="flex items-center gap-1 text-emerald-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+              <span className="flex items-center gap-1 text-emerald-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 shrink-0 whitespace-nowrap">
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span>Подключено</span>
               </span>
             ) : (
-              <span className="flex items-center gap-1 text-rose-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20">
+              <span className="flex items-center gap-1 text-rose-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 shrink-0 whitespace-nowrap">
                 <XCircle className="w-3.5 h-3.5" />
                 <span>Недоступен</span>
               </span>
@@ -533,8 +533,8 @@ export const SettingsView: React.FC = () => {
                   : "text-slate-400 hover:text-white hover:bg-slate-800/50"
               }`}
             >
-              <HardDrive className="w-3.5 h-3.5" />
-              <span>Локальный Whisper (Автономно)</span>
+              <HardDrive className="w-3.5 h-3.5 shrink-0" />
+              <span className="whitespace-nowrap">Локальный Whisper</span>
             </button>
             <button
               type="button"
@@ -545,8 +545,8 @@ export const SettingsView: React.FC = () => {
                   : "text-slate-400 hover:text-white hover:bg-slate-800/50"
               }`}
             >
-              <Globe className="w-3.5 h-3.5" />
-              <span>Внешний сервис (Cloud / API)</span>
+              <Globe className="w-3.5 h-3.5 shrink-0" />
+              <span className="whitespace-nowrap">Cloud</span>
             </button>
           </div>
 
@@ -561,13 +561,13 @@ export const SettingsView: React.FC = () => {
                     <span className="text-slate-200 font-medium text-xs">Рабочая среда (faster-whisper)</span>
                   </div>
                   {(whisperDetails?.local?.env_installed ?? systemStatus?.whisper?.local?.env_installed) ? (
-                    <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-medium shrink-0 whitespace-nowrap">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                       <span>Установлена</span>
                     </span>
                   ) : (
-                    <span className="flex items-center gap-1 text-[11px] text-rose-400 font-medium">
-                      <XCircle className="w-3.5 h-3.5" />
+                    <span className="flex items-center gap-1 text-[11px] text-rose-400 font-medium shrink-0 whitespace-nowrap">
+                      <XCircle className="w-3.5 h-3.5 shrink-0" />
                       <span>Не установлена</span>
                     </span>
                   )}
@@ -623,13 +623,13 @@ export const SettingsView: React.FC = () => {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="space-y-2">
                   {(whisperDetails?.local?.catalog || [
                     { id: "tiny", name: "Tiny", size_mb: 75, description: "Сверхбыстрая, минимальные требования (75 МБ)", recommended: false, downloaded: false },
-                    { id: "base", name: "Base", size_mb: 145, description: "Быстрая базовая модель (145 МБ)", recommended: false, downloaded: false },
-                    { id: "small", name: "Small", size_mb: 480, description: "Рекомендуется: отличный баланс KZ/RU (480 МБ)", recommended: true, downloaded: false },
-                    { id: "medium", name: "Medium", size_mb: 1500, description: "Высокая точность (1.5 ГБ)", recommended: false, downloaded: false },
-                    { id: "large-v3-turbo", name: "Large v3 Turbo", size_mb: 1600, description: "Максимум качества (1.6 ГБ)", recommended: false, downloaded: false },
+                    { id: "base", name: "Base", size_mb: 145, description: "Быстрая базовая модель для простых диалогов (145 МБ)", recommended: false, downloaded: false },
+                    { id: "small", name: "Small", size_mb: 480, description: "Рекомендуется: отличный баланс качества для русского и казахского (480 МБ)", recommended: true, downloaded: false },
+                    { id: "medium", name: "Medium", size_mb: 1500, description: "Высокая точность распознавания профессиональной речи (1.5 ГБ)", recommended: false, downloaded: false },
+                    { id: "large-v3-turbo", name: "Large v3 Turbo", size_mb: 1600, description: "Максимальное качество и скорость последнего поколения (1.6 ГБ)", recommended: false, downloaded: false },
                   ]).map((m: any) => {
                     const isSelected = config.whisper_local_model === m.id;
                     const isDownloading = whisperDetails?.local?.downloading && whisperDetails?.local?.downloading_model === m.id;
@@ -644,46 +644,49 @@ export const SettingsView: React.FC = () => {
                             : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
                         }`}
                       >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-semibold text-white text-xs">{m.name}</span>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-semibold text-white text-xs whitespace-nowrap">{m.name}</span>
                             {m.recommended && (
-                              <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shrink-0 whitespace-nowrap">
                                 ВЫБОР
                               </span>
                             )}
                           </div>
                           {m.downloaded ? (
-                            <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
-                              <Check className="w-3 h-3" />
+                            <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1 shrink-0 whitespace-nowrap">
+                              <Check className="w-3 h-3 shrink-0" />
                               <span>Скачана ({m.disk_size_mb || m.size_mb} МБ)</span>
                             </span>
                           ) : isDownloading ? (
-                            <span className="text-[10px] text-cyan-400 font-medium flex items-center gap-1 animate-pulse">
-                              <Loader2 className="w-3 h-3 animate-spin" />
+                            <span className="text-[10px] text-cyan-400 font-medium flex items-center gap-1 animate-pulse shrink-0 whitespace-nowrap">
+                              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
                               <span>Скачивание...</span>
                             </span>
                           ) : (
-                            <span className="text-[10px] text-slate-500">~{m.size_mb} МБ</span>
+                            <span className="text-[10px] text-slate-500 shrink-0 whitespace-nowrap">~{m.size_mb} МБ</span>
                           )}
                         </div>
-                        <p className="text-[11px] text-slate-400 mt-1">{m.description}</p>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">{m.description}</p>
 
                         {isSelected && (
                           <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
                             {m.downloaded ? (
                               <>
-                                <span className="text-[11px] text-emerald-300 font-medium">Выбрана для работы</span>
+                                <span className="text-[11px] text-emerald-300 font-medium flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+                                  <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                                  <span>Выбрана для работы</span>
+                                </span>
                                 <button
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     handleDeleteModel(m.id);
                                   }}
-                                  className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1"
+                                  className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 shrink-0 px-2 py-0.5 rounded hover:bg-rose-500/10 transition-colors"
                                   title="Удалить модель с диска"
                                 >
-                                  <Trash2 className="w-3 h-3" />
+                                  <Trash2 className="w-3 h-3 shrink-0" />
                                   <span>Удалить</span>
                                 </button>
                               </>
@@ -699,12 +702,12 @@ export const SettingsView: React.FC = () => {
                               >
                                 {isDownloading ? (
                                   <>
-                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    <Loader2 className="w-3 h-3 animate-spin shrink-0" />
                                     <span>Скачивается...</span>
                                   </>
                                 ) : (
                                   <>
-                                    <Download className="w-3 h-3" />
+                                    <Download className="w-3 h-3 shrink-0" />
                                     <span>Скачать модель {m.name}</span>
                                   </>
                                 )}

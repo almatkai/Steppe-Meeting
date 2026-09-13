@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { CheckCircle2, User, Calendar, FileText, CheckSquare, Copy, Check, AlertTriangle } from "lucide-react";
+import { MarkdownViewer } from "../ui/MarkdownViewer";
 import type { SummaryData } from "../../types";
 
 interface SummaryViewProps {
@@ -68,9 +69,11 @@ export const SummaryView: React.FC<SummaryViewProps> = ({ summaryRu, summaryKz }
           <FileText className="w-4 h-4" />
           <span>{lang === "kz" ? "Негізгі түйін" : "Краткое содержание (Executive Summary)"}</span>
         </div>
-        <p className="text-sm text-slate-200 leading-relaxed font-sans select-text">
-          {activeSummary?.executive_summary || "Краткое резюме еще формируется..."}
-        </p>
+        {activeSummary?.executive_summary ? (
+          <MarkdownViewer content={activeSummary.executive_summary} />
+        ) : (
+          <p className="text-sm text-slate-400 italic">Краткое резюме еще формируется...</p>
+        )}
       </div>
 
       {/* Action Items Matrix */}
