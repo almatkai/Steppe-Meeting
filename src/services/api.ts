@@ -255,6 +255,32 @@ export const api = {
     return res.json();
   },
 
+  // PDF Export URL
+  getExportPdfUrl(meetingId: string, lang: "ru" | "kz" = "ru"): string {
+    return `${API_BASE}/meetings/${meetingId}/export/pdf?lang=${lang}`;
+  },
+
+  async saveExportPdf(
+    meetingId: string,
+    lang: "ru" | "kz" = "ru",
+    options?: { openFolder?: boolean; openFile?: boolean }
+  ): Promise<{ success: boolean; filename: string; path: string }> {
+    const res = await fetch(`${API_BASE}/meetings/${meetingId}/export/pdf/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lang,
+        open_folder: options?.openFolder ?? true,
+        open_file: options?.openFile ?? false,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Не удалось экспортировать протокол в PDF");
+    }
+    return res.json();
+  },
+
   async openSystemFile(path: string): Promise<any> {
     const res = await fetch(`${API_BASE}/system/open-file`, {
       method: "POST",
@@ -363,6 +389,10 @@ export const api = {
 
   getTestDocxDownloadUrl(id: string): string {
     return `${API_BASE}/templates/${id}/test-download`;
+  },
+
+  getTestPdfDownloadUrl(id: string): string {
+    return `${API_BASE}/templates/${id}/test-download-pdf`;
   },
 
   getSampleTemplateDownloadUrl(): string {

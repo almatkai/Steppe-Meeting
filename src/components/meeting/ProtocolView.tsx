@@ -15,7 +15,7 @@ import { SteppeIcon } from "../ui/SteppeIcon";
 import type { ProtocolData } from "../../types";
 import { api } from "../../services/api";
 import { useMeetingStore } from "../../store/useMeetingStore";
-import { downloadMeetingProtocol } from "../../utils/fileDownload";
+import { downloadMeetingProtocol, downloadMeetingProtocolPdf } from "../../utils/fileDownload";
 
 interface ProtocolViewProps {
   meetingId: string;
@@ -39,6 +39,7 @@ export const ProtocolView: React.FC<ProtocolViewProps> = ({
   const [lang, setLang] = useState<"ru" | "kz">("ru");
   const [copied, setCopied] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   // Floating AI edit toolbar state
   const [selectedText, setSelectedText] = useState("");
@@ -133,6 +134,17 @@ export const ProtocolView: React.FC<ProtocolViewProps> = ({
     }
   };
 
+  const downloadPdf = async () => {
+    try {
+      setIsExportingPdf(true);
+      await downloadMeetingProtocolPdf(meetingId, lang, meetingTitle);
+    } catch {
+      // Toast notification already shown
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   const rawTopics = (activeProtocol as any)?.agenda_items || activeProtocol?.topics || [];
   const topics = rawTopics.map((t: any) => ({
     topic_name: t.topic || t.topic_name || "Вопрос",
@@ -144,7 +156,7 @@ export const ProtocolView: React.FC<ProtocolViewProps> = ({
   return (
     <div className="space-y-6 relative" onMouseUp={handleMouseUp}>
       {/* Action Header */}
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         {/* Language Tabs */}
         <div className="flex items-center p-1 rounded-xl bg-slate-900 border border-slate-800">
           <button
@@ -172,7 +184,7 @@ export const ProtocolView: React.FC<ProtocolViewProps> = ({
         </div>
 
         {/* Action buttons */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={downloadDocx}
@@ -184,7 +196,21 @@ export const ProtocolView: React.FC<ProtocolViewProps> = ({
             ) : (
               <Download className="w-3.5 h-3.5" />
             )}
-            <span>{isExporting ? "Экспорт..." : "Скачать DOCX"}</span>
+            <span>{isExporting ? "Экспорт DOCX..." : "Скачать DOCX"}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={downloadPdf}
+            disabled={isExportingPdf}
+            className="flex items-center gap-1.5 py-2 px-3.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-60 text-white text-xs font-medium transition-all shadow-md shadow-rose-600/20 cursor-pointer"
+          >
+            {isExportingPdf ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            <span>{isExportingPdf ? "Экспорт PDF..." : "Скачать PDF"}</span>
           </button>
 
           <button

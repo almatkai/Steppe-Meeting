@@ -496,15 +496,13 @@ def _outline_row(paragraph: Paragraph):
         numbering = _paragraph_numbering(paragraph)
         level = numbering[0] if numbering is not None else None
         marker = text
-    if level is None:
-        return None
-    if not (VISUAL_MARKER_RE.fullmatch(marker) or PLACEHOLDER_RE.fullmatch(marker)):
+    if level is None or not marker:
         return None
     return level, marker
 
 
 def _outline_paragraph_groups(paragraphs: list[Any]) -> dict[int, dict[str, Any]]:
-    """Recognize fillable multilevel examples, including legacy scalar fields."""
+    """Recognize fillable multilevel examples, including legacy scalar fields and sample lists."""
     groups = {}
     index = 0
     while index < len(paragraphs):
@@ -526,6 +524,14 @@ def _outline_paragraph_groups(paragraphs: list[Any]) -> dict[int, dict[str, Any]
             continue
         if any(current > previous + 1 for previous, current in zip(levels, levels[1:])):
             continue
+
+        has_any_marker = any(
+            bool(list(_visual_matches(r[2]))) or bool(list(PLACEHOLDER_RE.finditer(r[2])))
+            for r in rows
+        )
+        if not has_any_marker and max(levels) == 0:
+            continue
+
         repeat = {
             'kind': 'numbered_outline',
             'original_count': len(rows),
@@ -536,13 +542,143 @@ def _outline_paragraph_groups(paragraphs: list[Any]) -> dict[int, dict[str, Any]
             ],
             'prototype_levels': levels,
         }
+        section = _nearest_section_label(paragraphs, start)
+        label = f'{section} — пункты' if section else 'Пункты документа'
         for row_index, _, marker in rows:
             groups[row_index] = {
                 'key': f'repeated_outline_{start}',
-                'label': 'Пункты документа',
+                'label': label,
                 'marker': marker,
                 'repeat': repeat,
             }
+    return groups
+
+
+_NUMBERED_RECORD_RE = re.compile(r'^(?P<space>\s*)(?P<number>\d+)(?P<suffix>[.)]?)(?P<gap>\s+)')
+_AGENDA_LABEL_RE = re.compile(r'повест|күн\s+тәртіб', re.IGNORECASE)
+_SPEAKER_LABEL_RE = re.compile(r'докладчик|баяндамашы', re.IGNORECASE)
+
+
+def _paragraph_record_signature(paragraphs: list[Any], start: int, length: int) -> tuple[str, ...]:
+    signature = []
+    for offset, paragraph in enumerate(paragraphs[start:start + length]):
+        text = paragraph.text or ''
+        if offset == 0:
+            text = _NUMBERED_RECORD_RE.sub('# ', text, count=1)
+        text = VISUAL_MARKER_RE.sub('⟦ПОЛЕ⟧', text)
+        signature.append(text)
+    return tuple(signature)
+
+
+def _paragraph_record_groups(paragraphs: list[Any]) -> dict[int, dict[str, Any]]:
+    """Recognize repeated records made of multiple consecutive paragraphs."""
+    anchors = []
+    for index, paragraph in enumerate(paragraphs):
+        number = _NUMBERED_RECORD_RE.match(paragraph.text or '')
+        if number is not None and list(_visual_matches(paragraph.text or '')):
+            anchors.append((index, int(number.group('number')), number.group('suffix')))
+
+    groups: dict[int, dict[str, Any]] = {}
+    position = 0
+    used_keys: set[str] = set()
+    while position + 1 < len(anchors):
+        start_position = position
+        first, first_number, suffix = anchors[position]
+        second, second_number, second_suffix = anchors[position + 1]
+        item_length = second - first
+        if first_number + 1 != second_number or item_length < 2 or suffix != second_suffix:
+            position += 1
+            continue
+
+        selected = [anchors[position], anchors[position + 1]]
+        position += 2
+        while position < len(anchors):
+            candidate = anchors[position]
+            previous = selected[-1]
+            if (
+                candidate[0] - previous[0] != item_length
+                or candidate[1] != previous[1] + 1
+                or candidate[2] != suffix
+            ):
+                break
+            selected.append(candidate)
+            position += 1
+
+        if first + item_length * len(selected) > len(paragraphs):
+            position = start_position + 1
+            continue
+        signatures = [
+            _paragraph_record_signature(paragraphs, index, item_length)
+            for index, _, _ in selected
+        ]
+        if any(signature != signatures[0] for signature in signatures[1:]):
+            position = start_position + 1
+            continue
+        if any(
+            paragraphs[index]._p.getnext() is not paragraphs[index + 1]._p
+            for anchor, _, _ in selected
+            for index in range(anchor, anchor + item_length - 1)
+        ):
+            position = start_position + 1
+            continue
+
+        section = _nearest_section_label(paragraphs, first)
+        is_agenda = _AGENDA_LABEL_RE.search(section) is not None
+        key = 'agenda_items' if is_agenda else f'repeated_paragraph_records_{first}'
+        if key in used_keys:
+            key = f'{key}_{first}'
+        used_keys.add(key)
+
+        columns = []
+        used_column_keys: dict[str, Slot] = {}
+        field_number = 0
+        for paragraph_offset, paragraph in enumerate(paragraphs[first:first + item_length]):
+            text = paragraph.text or ''
+            for marker_index, marker in enumerate(_visual_matches(text)):
+                field_number += 1
+                label = _semantic_marker_label(marker.group(0)) or _label_from_context(
+                    text, marker.start(), f'Поле {field_number}',
+                )
+                if is_agenda and paragraph_offset == 0:
+                    column_key = 'topic'
+                elif is_agenda and _SPEAKER_LABEL_RE.search(text):
+                    column_key = 'speaker'
+                else:
+                    column_key = _slot_key(label, used_column_keys, f'field_{field_number}')
+                if column_key in used_column_keys:
+                    column_key = _slot_key(column_key, used_column_keys, f'field_{field_number}')
+                used_column_keys[column_key] = Slot(
+                    key=column_key,
+                    label=label,
+                    value_type='string',
+                )
+                columns.append({
+                    'key': column_key,
+                    'label': label,
+                    'paragraph_offset': paragraph_offset,
+                    'marker_index': marker_index,
+                })
+        if len(columns) < 2:
+            position = start_position + 1
+            continue
+
+        repeat = {
+            'kind': 'paragraph_records',
+            'start_paragraph': first,
+            'original_count': len(selected),
+            'item_length': item_length,
+            'number_suffix': suffix,
+            'columns': columns,
+        }
+        group = {
+            'key': key,
+            'label': section or 'Повторяемые составные блоки',
+            'marker': 'paragraph-record',
+            'repeat': repeat,
+        }
+        for anchor, _, _ in selected:
+            for index in range(anchor, anchor + item_length):
+                groups[index] = group
     return groups
 
 
@@ -1013,6 +1149,7 @@ def parse_docx_template(
     visual_line_contexts = _visual_line_contexts(document.paragraphs)
     numbered_groups = _numbered_paragraph_groups(document.paragraphs)
     numbered_groups.update(_outline_paragraph_groups(document.paragraphs))
+    numbered_groups.update(_paragraph_record_groups(document.paragraphs))
     numbered_table_groups = _numbered_table_groups(document)
 
     for paragraph_index, paragraph in enumerate(document.paragraphs):
@@ -1039,7 +1176,10 @@ def parse_docx_template(
                 location=location,
                 raw=numbered_group['marker'],
                 value_type=(
-                    'list[object]' if numbered_group['repeat']['kind'] == 'numbered_outline'
+                    'list[object]'
+                    if numbered_group['repeat']['kind'] in {
+                        'numbered_outline', 'paragraph_records',
+                    }
                     else 'list[string]'
                 ),
                 repeat=numbered_group['repeat'],
@@ -1421,6 +1561,87 @@ def _normalize_outline_group(document: Any, slot: Slot) -> None:
         element.getparent().remove(element)
 
 
+def _normalize_paragraph_record_group(document: Any, slot: Slot) -> None:
+    if slot.repeat is None:
+        return
+    start = slot.repeat['start_paragraph']
+    item_length = slot.repeat['item_length']
+    original_count = slot.repeat['original_count']
+    paragraphs = document.paragraphs
+    prototype = paragraphs[start:start + item_length]
+    if len(prototype) != item_length:
+        raise ValueError(f"Paragraph record prototype is incomplete: {slot.key}")
+
+    columns_by_paragraph: dict[int, list[dict[str, Any]]] = {}
+    for column in slot.repeat['columns']:
+        columns_by_paragraph.setdefault(column['paragraph_offset'], []).append(column)
+    for paragraph_offset, paragraph in enumerate(prototype):
+        text = paragraph.text or ''
+        replacements = []
+        if paragraph_offset == 0:
+            number = _NUMBERED_RECORD_RE.match(text)
+            if number is None:
+                raise ValueError(f"Paragraph record number is missing: {slot.key}")
+            replacements.append((
+                number.start(),
+                number.end(),
+                number.group('space') + '{{ loop.index }}'
+                + number.group('suffix') + number.group('gap'),
+            ))
+        markers = list(_visual_matches(text))
+        for column in columns_by_paragraph.get(paragraph_offset, []):
+            marker_index = column['marker_index']
+            if marker_index >= len(markers):
+                raise ValueError(f"Paragraph record field is missing: {column['key']}")
+            marker = markers[marker_index]
+            replacements.append((
+                marker.start(), marker.end(), f"{{{{ row.{column['key']} }}}}",
+            ))
+        _replace_text_spans_in_paragraph(paragraph, text, replacements)
+
+    first_extra = start + item_length
+    last_extra = start + item_length * original_count
+    for index in reversed(range(first_extra, last_extra)):
+        element = document.paragraphs[index]._element
+        element.getparent().remove(element)
+
+    start_control_element = deepcopy(prototype[0]._p)
+    start_control = Paragraph(start_control_element, prototype[0]._parent)
+    _set_paragraph_text(start_control, f'{{%p for row in {slot.key} %}}')
+    prototype[0]._p.addprevious(start_control_element)
+
+    end_control_element = deepcopy(prototype[-1]._p)
+    end_control = Paragraph(end_control_element, prototype[-1]._parent)
+    _set_paragraph_text(end_control, '{%p endfor %}')
+    prototype[-1]._p.addnext(end_control_element)
+
+
+def heuristic_classify_parenthetical_candidates(candidates: list[dict]) -> list[dict]:
+    """Fast, deterministic rule-based classification for standard parenthetical expressions."""
+    promoted = []
+    for c in candidates:
+        text = c.get('text', '').strip().lower()
+        if 'по списку' in text or 'тізім бойынша' in text:
+            promoted.append({
+                **c,
+                'label': 'Присутствовавшие участники (по списку)',
+                'value_type': 'list[string]',
+            })
+        elif 'фамилии участников' in text or 'қатысушылардың тегі' in text or 'талқылаған' in text:
+            promoted.append({
+                **c,
+                'label': 'Выступившие участники',
+                'value_type': 'list[string]',
+            })
+        elif 'повестка дня' in text or 'күн тәртібі' in text:
+            promoted.append({
+                **c,
+                'label': 'Повестка дня',
+                'value_type': 'string',
+            })
+    return promoted
+
+
 def _set_cell_content(cell: Any, text: str) -> None:
     paragraph = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
     _set_paragraph_text(paragraph, text)
@@ -1489,7 +1710,9 @@ def normalize_visual_markers(docx_bytes: bytes) -> bytes:
 
     for slot in parsed.slots:
         if slot.repeat:
-            if slot.repeat.get('kind') in ('numbered_paragraphs', 'numbered_outline'):
+            if slot.repeat.get('kind') in (
+                'numbered_paragraphs', 'numbered_outline', 'paragraph_records',
+            ):
                 repeated_paragraphs.append(slot)
             elif slot.repeat.get('kind') == 'table_rows':
                 repeated_tables.append(slot)
@@ -1568,6 +1791,8 @@ def normalize_visual_markers(docx_bytes: bytes) -> bytes:
     ):
         if slot.repeat['kind'] == 'numbered_outline':
             _normalize_outline_group(document, slot)
+        elif slot.repeat['kind'] == 'paragraph_records':
+            _normalize_paragraph_record_group(document, slot)
         else:
             _normalize_numbered_paragraph_group(document, slot)
 
@@ -1597,6 +1822,31 @@ def prepare_flexible_template(
             slot.inline = stored.get('inline', False)
             slot.marker_contexts = stored.get('marker_contexts', [])
     return working, parsed
+
+
+def prepare_template_pipeline(
+    docx_bytes: bytes,
+    stored_slots: list[dict] | None = None,
+) -> tuple[bytes, ParsedTemplate]:
+    """Complete preparation pipeline for uploaded DOCX templates:
+    1. Parenthetical candidate detection and promotion.
+    2. Parsing repeatable paragraph records, tables, and outlines.
+    3. Normalizing visual markers into Jinja docxtpl tags.
+    4. Binding slots and repeat metadata.
+    """
+    source_parsed = parse_docx_template(docx_bytes)
+    candidates = parenthetical_candidates(source_parsed)
+    promoted = heuristic_classify_parenthetical_candidates(candidates)
+    if promoted:
+        try:
+            classified_bytes = promote_parenthetical_fields(docx_bytes, promoted)
+        except Exception:
+            classified_bytes = docx_bytes
+    else:
+        classified_bytes = docx_bytes
+
+    working_bytes, parsed = prepare_flexible_template(classified_bytes, stored_slots or [])
+    return working_bytes, parsed
 
 
 def parsed_to_descriptor(parsed: ParsedTemplate, name: str = "Template") -> dict[str, Any]:

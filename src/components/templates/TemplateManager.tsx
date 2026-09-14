@@ -188,15 +188,25 @@ export const TemplateManager: React.FC = () => {
     }
   };
 
-  const handleDelete = async (t: ProtocolTemplate) => {
+  const [templateToDelete, setTemplateToDelete] = useState<ProtocolTemplate | null>(null);
+
+  const handleDelete = (t: ProtocolTemplate) => {
     if (t.id === "default-protocol-template") return;
-    if (!window.confirm(`Удалить шаблон «${t.name}»? Это действие нельзя отменить.`)) return;
+    setTemplateToDelete(t);
+  };
+
+  const confirmDelete = async () => {
+    if (!templateToDelete || templateToDelete.id === "default-protocol-template") return;
+    const t = templateToDelete;
     try {
       setDeletingId(t.id);
       setNotice("");
+      setTemplateToDelete(null);
       const res = await api.deleteTemplate(t.id);
       if (res.detached_meetings) {
         setNotice(`Шаблон «${t.name}» удалён. ${res.detached_meetings} сов. переключено на стандартный протокол.`);
+      } else {
+        setNotice(`Шаблон «${t.name}» успешно удалён.`);
       }
       await loadTemplates();
     } catch (e: any) {
@@ -516,16 +526,26 @@ export const TemplateManager: React.FC = () => {
                   <div className="mt-3 pt-3 border-t border-slate-800/80">
                     {t.slots && t.slots.length > 0 ? (
                       <div className="flex flex-wrap gap-1.5">
-                        {t.slots.map((s) => (
-                          <span
-                            key={s.key}
-                            title={`${s.label || s.key} (${s.value_type || "string"})`}
-                            className="px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-[11px] font-mono text-indigo-300"
-                          >
-                            {s.key}
-                            <span className="text-slate-500 ml-1">{s.value_type}</span>
-                          </span>
-                        ))}
+                        {t.slots.map((s) => {
+                          const isRepeat = !!s.repeat || s.value_type?.startsWith("list[");
+                          const kindLabel = s.repeat?.kind === "numbered_outline" ? "иерархия" : (s.repeat?.kind === "table_rows" ? "строки" : s.value_type || "поле");
+                          return (
+                            <span
+                              key={s.key}
+                              title={`${s.label || s.key} (${s.value_type || "string"})${isRepeat ? " [Повторяющийся список/иерархия]" : ""}`}
+                              className={`px-2 py-0.5 rounded-md border text-[11px] font-mono flex items-center gap-1.5 ${
+                                isRepeat
+                                  ? "bg-amber-950/30 border-amber-500/40 text-amber-300"
+                                  : "bg-slate-900 border-slate-700 text-indigo-300"
+                              }`}
+                            >
+                              <span>{s.key}</span>
+                              <span className={`text-[9px] px-1 py-0.2 rounded ${isRepeat ? "bg-amber-500/20 text-amber-300 font-semibold" : "bg-slate-800 text-slate-400"}`}>
+                                {kindLabel}
+                              </span>
+                            </span>
+                          );
+                        })}
                       </div>
                     ) : (
                       <p className="text-[11px] text-slate-500">Поля не найдены</p>
@@ -543,50 +563,53 @@ export const TemplateManager: React.FC = () => {
                           Проверка модели на вашем транскрипте
                         </h4>
                         <p className="text-[11px] text-slate-400 mt-1">
-                          Транскрипт будет отправлен текущей LLM. Результат заполнит поля этого шаблона.
+                          Загрузите текстовый файл транскрипта или вставьте текст ниже, чтобы проверить заполнение этого шаблона.
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTestId(null)}
-                        title="Закрыть"
-                        className="p-1 rounded-md text-slate-500 hover:text-white hover:bg-slate-800"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <label className="text-[11px] text-slate-400">Детализация:</label>
+                        <select
+                          value={testDetailLevel}
+                          onChange={(e) => setTestDetailLevel(e.target.value as any)}
+                          className="py-1 px-2 text-xs rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-violet-500"
+                        >
+                          {DETAIL_LEVELS.map((dl) => (
+                            <option key={dl.value} value={dl.value}>
+                              {dl.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-[1fr_180px] gap-3">
-                      <label className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-900 border border-dashed border-slate-700 hover:border-violet-500 cursor-pointer transition-colors min-w-0">
-                        <UploadCloud className="w-4 h-4 text-violet-400 shrink-0" />
-                        <span className="min-w-0">
-                          <span className="block text-xs font-medium text-white truncate">
-                            {testTranscriptFile || "Загрузить транскрипт"}
-                          </span>
-                          <span className="block text-[10px] text-slate-500">TXT, MD, SRT, VTT или JSON • до 5 МБ</span>
-                        </span>
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-1.5 py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold cursor-pointer transition-colors">
+                        <FileUp className="w-3.5 h-3.5 text-violet-400" />
+                        <span>{testTranscriptFile || "Загрузить файл транскрипта (.txt)"}</span>
                         <input
                           type="file"
-                          accept=".txt,.md,.srt,.vtt,.json,text/plain,text/markdown,application/json"
-                          className="hidden"
+                          accept=".txt,.md"
                           onChange={(e) => handleTranscriptFile(e.target.files?.[0] || null, t.id)}
+                          className="hidden"
                         />
                       </label>
-
-                      <select
-                        value={testDetailLevel}
-                        onChange={(e) => setTestDetailLevel(e.target.value as typeof testDetailLevel)}
-                        aria-label="Детализация тестового протокола"
-                        className="py-2.5 px-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-violet-500"
-                      >
-                        {DETAIL_LEVELS.map((d) => (
-                          <option key={d.value} value={d.value}>{d.label} протокол</option>
-                        ))}
-                      </select>
+                      {testTranscriptFile && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTestTranscript("");
+                            setTestTranscriptFile("");
+                          }}
+                          className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+                          title="Очистить"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
 
                     <textarea
-                      rows={7}
+                      rows={5}
                       value={testTranscript}
                       onChange={(e) => {
                         setTestTranscript(e.target.value);
@@ -607,7 +630,7 @@ export const TemplateManager: React.FC = () => {
                       <span className="text-[10px] text-slate-500">
                         {testTranscript.trim().length.toLocaleString("ru-RU")} символов
                       </span>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         {t.has_test_docx && !result && (
                           <button
                             type="button"
@@ -615,7 +638,17 @@ export const TemplateManager: React.FC = () => {
                             className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold"
                           >
                             <Download className="w-3.5 h-3.5" />
-                            <span>Последний тестовый DOCX</span>
+                            <span>Тестовый DOCX</span>
+                          </button>
+                        )}
+                        {t.has_test_pdf && !result && (
+                          <button
+                            type="button"
+                            onClick={() => downloadFileFromUrl(api.getTestPdfDownloadUrl(t.id), `Тест_${t.name || "шаблон"}.pdf`)}
+                            className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/40 text-rose-200 text-xs font-semibold"
+                          >
+                            <Download className="w-3.5 h-3.5 text-rose-400" />
+                            <span>Тестовый PDF</span>
                           </button>
                         )}
                         <button
@@ -638,14 +671,24 @@ export const TemplateManager: React.FC = () => {
                             {result.model || "Модель"} заполнила {result.slots_filled} полей
                             {result.generation_seconds != null && ` за ${result.generation_seconds} сек.`}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => downloadFileFromUrl(api.getTestDocxDownloadUrl(t.id), `Тест_${t.name || "шаблон"}.docx`)}
-                            className="flex items-center gap-1.5 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            <span>Скачать тестовый протокол .docx</span>
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => downloadFileFromUrl(api.getTestDocxDownloadUrl(t.id), `Тест_${t.name || "шаблон"}.docx`)}
+                              className="flex items-center gap-1.5 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Скачать DOCX</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => downloadFileFromUrl(api.getTestPdfDownloadUrl(t.id), `Тест_${t.name || "шаблон"}.pdf`)}
+                              className="flex items-center gap-1.5 py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-sm"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Скачать PDF</span>
+                            </button>
+                          </div>
                         </div>
                         <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/80">
                           {Object.entries(result.values).map(([key, value]) => {
@@ -670,6 +713,43 @@ export const TemplateManager: React.FC = () => {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Delete Template Confirmation Modal */}
+      {templateToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-6 text-slate-100">
+            <div className="flex items-center gap-3 mb-4 text-rose-400">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Удалить шаблон?</h3>
+                <p className="text-xs text-slate-400">Это действие нельзя отменить</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-300 mb-6 leading-relaxed">
+              Вы действительно хотите удалить шаблон <span className="font-semibold text-white">«{templateToDelete.name}»</span>?
+              Файлы шаблона будут удалены, а привязанные совещания автоматически переключатся на стандартный протокол.
+            </p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setTemplateToDelete(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-lg shadow-rose-600/25 transition-colors"
+              >
+                Удалить шаблон
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

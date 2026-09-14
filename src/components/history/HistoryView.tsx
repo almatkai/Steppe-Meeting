@@ -17,6 +17,7 @@ import { downloadMeetingProtocol } from "../../utils/fileDownload";
 export const HistoryView: React.FC = () => {
   const { meetings, loadMeetings, selectMeeting, deleteMeeting, isLoading } = useMeetingStore();
   const [search, setSearch] = useState("");
+  const [meetingToDelete, setMeetingToDelete] = useState<{ id: string; title: string } | null>(null);
 
   useEffect(() => {
     loadMeetings();
@@ -122,9 +123,7 @@ export const HistoryView: React.FC = () => {
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (confirm("Вы уверены, что хотите удалить это совещание?")) {
-                      deleteMeeting(m.id);
-                    }
+                    setMeetingToDelete({ id: m.id, title: m.title });
                   }}
                   className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
                   title="Удалить"
@@ -146,6 +145,45 @@ export const HistoryView: React.FC = () => {
           <p className="text-xs text-slate-400 max-w-sm mx-auto">
             Создайте первое совещание с помощью мастера, чтобы сформировать протокол и сохранить его в локальную базу.
           </p>
+        </div>
+      )}
+
+      {/* Delete Meeting Modal */}
+      {meetingToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-6 text-slate-100">
+            <div className="flex items-center gap-3 mb-4 text-rose-400">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Удалить совещание?</h3>
+                <p className="text-xs text-slate-400">Это действие нельзя отменить</p>
+              </div>
+            </div>
+            <p className="text-sm text-slate-300 mb-6 leading-relaxed">
+              Вы уверены, что хотите удалить совещание <span className="font-semibold text-white">«{meetingToDelete.title}»</span>? Протокол, транскрипт и все связанные данные будут удалены из локальной базы.
+            </p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setMeetingToDelete(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteMeeting(meetingToDelete.id);
+                  setMeetingToDelete(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-lg shadow-rose-600/25 transition-colors"
+              >
+                Удалить совещание
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

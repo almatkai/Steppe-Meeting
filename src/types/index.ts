@@ -217,6 +217,7 @@ export interface ProtocolTemplate {
   slots_count: number;
   render_ready: number | boolean;
   has_test_docx: boolean;
+  has_test_pdf?: boolean;
   test_values?: Record<string, any>;
   created_at: string;
 }
@@ -226,6 +227,7 @@ export interface TemplateTestResult {
   values: Record<string, any>;
   slots_filled: number;
   has_test_docx: boolean;
+  has_test_pdf?: boolean;
   model?: string;
   generation_seconds?: number;
 }

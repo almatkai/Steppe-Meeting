@@ -335,28 +335,110 @@ def validate_profile(profile, parsed, language):
     }
 
 
-async def build_template_profile(docx_bytes, parsed, language):
-    """Ask the model once for reusable semantics derived from the complete DOCX."""
-    payload = {
-        'expected_document_language': language,
-        'required_field_keys': [slot.key for slot in parsed.slots],
-        'document': inspect_docx(docx_bytes, parsed),
+def heuristic_template_profile(parsed, language: str = 'ru') -> dict:
+    """Generate a valid, deterministic template profile without LLM dependency."""
+    slots = {slot.key: slot for slot in parsed.slots}
+    normalized = []
+    lang = language if language in {'ru', 'kz', 'en'} else 'ru'
+    for key, slot in slots.items():
+        repeat_kind = (slot.repeat or {}).get('kind')
+        columns = []
+        for col in (slot.repeat or {}).get('columns', []):
+            col_key = col.get('key', '')
+            col_label = col.get('label') or col_key
+            col_purpose = 'actions' if any(w in col_key.lower() for w in ('poruchen', 'reshen', 'decision', 'item', 'text')) else (
+                'deadline' if any(w in col_key.lower() for w in ('srok', 'date', 'data')) else (
+                    'owner' if any(w in col_key.lower() for w in ('otv', 'ispoln', 'responsible')) else 'content'
+                )
+            )
+            columns.append({
+                'key': col_key,
+                'purpose': col_purpose,
+                'semantic_meaning': col_label,
+            })
+
+        if repeat_kind == 'numbered_outline':
+            structure = 'hierarchy'
+            purpose = 'decisions'
+        elif repeat_kind == 'table_rows':
+            structure = 'table'
+            purpose = 'actions'
+        elif slot.value_type == 'list[string]':
+            structure = 'list'
+            purpose = 'participants' if any(w in key.lower() for w in ('uchastnik', 'prisutstv', 'participant')) else 'decisions'
+        elif slot.value_type.startswith('list['):
+            structure = 'table'
+            purpose = 'actions'
+        elif any(w in key.lower() for w in ('date', 'data', 'kuni')):
+            structure = 'scalar'
+            purpose = 'date'
+        elif any(w in key.lower() for w in ('nomer', 'number', 'indeks')):
+            structure = 'scalar'
+            purpose = 'number'
+        elif any(w in key.lower() for w in ('predsedatel', 'sekretar', 'podpis', 'rukovoditel', 'chair', 'secretary')):
+            structure = 'scalar'
+            purpose = 'signature'
+        elif any(w in key.lower() for w in ('povestka', 'agenda', 'temy')):
+            structure = 'text'
+            purpose = 'agenda'
+        elif any(w in key.lower() for w in ('title', 'nazvanie', 'tema', 'subject')):
+            structure = 'scalar'
+            purpose = 'title'
+        else:
+            structure = 'text' if slot.value_type == 'string' else 'scalar'
+            purpose = 'content'
+
+        repeatable = slot.repeat is not None or slot.value_type.startswith('list[')
+        normalized.append({
+            'key': key,
+            'semantic_meaning': slot.label or key,
+            'purpose': purpose,
+            'structure': structure,
+            'value_type': slot.value_type,
+            'locations': slot.locations,
+            'repeatable': repeatable,
+            'blank_when_unsupported': True,
+            **({'columns': columns} if columns else {}),
+            **({'repeat': slot.repeat} if slot.repeat else {}),
+        })
+
+    return {
+        'version': PROFILE_VERSION,
+        'document_language': lang,
+        'document_purpose': 'Протокол совещания' if lang == 'ru' else ('Мәжіліс хаттамасы' if lang == 'kz' else 'Meeting minutes'),
+        'writing_style': 'Официально-деловой протокольный стиль',
+        'generation_instructions': 'Заполнить поля протокола в соответствии с материалами совещания.',
+        'fields': normalized,
+        'warnings': [],
     }
-    messages = [
-        {'role': 'system', 'content': _PROFILE_PROMPT},
-        {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
-    ]
-    error = None
-    response = {}
-    for attempt in range(2):
-        try:
-            response = await llm.complete_json(messages)
-            return validate_profile(response, parsed, language)
-        except (llm.LLMError, ValueError) as caught:
-            error = caught
-            if attempt == 0:
-                messages.extend([
-                    {'role': 'assistant', 'content': json.dumps(response, ensure_ascii=False)},
-                    {'role': 'user', 'content': f'Correct the complete profile: {caught}'},
-                ])
-    raise ValueError(f'Template profile generation failed after retry: {error}')
+
+
+async def build_template_profile(docx_bytes, parsed, language='ru'):
+    """Ask the model once for reusable semantics derived from the complete DOCX,
+    falling back to deterministic heuristic semantics if LLM is unavailable or fails."""
+    try:
+        payload = {
+            'expected_document_language': language,
+            'required_field_keys': [slot.key for slot in parsed.slots],
+            'document': inspect_docx(docx_bytes, parsed),
+        }
+        messages = [
+            {'role': 'system', 'content': _PROFILE_PROMPT},
+            {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
+        ]
+        error = None
+        response = {}
+        for attempt in range(2):
+            try:
+                response = await llm.complete_json(messages)
+                return validate_profile(response, parsed, language)
+            except (llm.LLMError, ValueError) as caught:
+                error = caught
+                if attempt == 0:
+                    messages.extend([
+                        {'role': 'assistant', 'content': json.dumps(response, ensure_ascii=False)},
+                        {'role': 'user', 'content': f'Correct the complete profile: {caught}'},
+                    ])
+    except Exception:
+        pass
+    return heuristic_template_profile(parsed, language)

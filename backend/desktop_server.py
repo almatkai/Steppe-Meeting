@@ -46,7 +46,7 @@ DB_PATH = DATA_DIR / "meetings.db"
 
 # Import local engine modules
 from engine.config import settings
-from engine import chunking, docx_template, docx_preview, template_generation, template_protocol, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
+from engine import chunking, docx_template, docx_preview, template_generation, template_profile, template_protocol, pdf_export, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
 
 # LLM telemetry is runtime data too, not a repo-relative directory.
 settings.LLM_LOG_DIR = str(DATA_DIR / "logs" / "llm")
@@ -135,9 +135,16 @@ def init_db():
                 render_ready INTEGER DEFAULT 0,
                 test_values TEXT DEFAULT '{}',
                 test_docx_path TEXT DEFAULT '',
+                test_pdf_path TEXT DEFAULT '',
                 created_at TEXT NOT NULL
             )
         """)
+
+        # Upgrade protocol_templates for test_pdf_path
+        try:
+            conn.execute("ALTER TABLE protocol_templates ADD COLUMN test_pdf_path TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
 
         # Upgrade meetings table for templates
         for col, col_type in [
@@ -1095,6 +1102,7 @@ async def get_template_detail(template_id: str):
         data["template_profile"] = json.loads(data["template_profile"] or "{}")
         data["test_values"] = json.loads(data.get("test_values") or "{}")
         data["has_test_docx"] = bool(data.get("test_docx_path") and os.path.exists(data["test_docx_path"]))
+        data["has_test_pdf"] = bool(data.get("test_pdf_path") and os.path.exists(data["test_pdf_path"]))
         return data
 
 
@@ -1106,22 +1114,7 @@ async def preview_template_slots(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Размер файла превышает лимит 50 МБ")
 
     try:
-        source_parsed = docx_template.parse_docx_template(content)
-        working_bytes = docx_template.normalize_visual_markers(content)
-        parsed = docx_template.parse_docx_template(working_bytes)
-
-        source_slots = {slot.key: slot for slot in source_parsed.slots}
-        loop_iters = docx_template._loop_iterables(working_bytes)
-        for slot in parsed.slots:
-            source_slot = source_slots.get(slot.key)
-            if source_slot and source_slot.source != "placeholder":
-                slot.label = source_slot.label
-                slot.value_type = source_slot.value_type
-                slot.repeat = source_slot.repeat
-                slot.omit_when_empty = source_slot.omit_when_empty
-            elif slot.key in loop_iters:
-                slot.value_type = "list[object]"
-
+        working_bytes, parsed = docx_template.prepare_template_pipeline(content)
         name = Path(file.filename or "template").stem
         descriptor = docx_template.parsed_to_descriptor(parsed, name)
         return {
@@ -1148,28 +1141,14 @@ async def upload_template(
         raise HTTPException(status_code=400, detail="Размер файла превышает лимит 50 МБ")
 
     try:
-        source_parsed = docx_template.parse_docx_template(docx_bytes)
-        if not source_parsed.slots:
+        working_bytes, parsed = docx_template.prepare_template_pipeline(docx_bytes)
+        if not parsed.slots:
             raise HTTPException(
                 status_code=400,
                 detail="В документе не найдены поля для заполнения. Используйте {{ field_name }}, линии ___ или инструкции [в скобках]."
             )
-        working_bytes = docx_template.normalize_visual_markers(docx_bytes)
-        parsed = docx_template.parse_docx_template(working_bytes)
-
-        source_slots = {slot.key: slot for slot in source_parsed.slots}
-        loop_iters = docx_template._loop_iterables(working_bytes)
-        for slot in parsed.slots:
-            source_slot = source_slots.get(slot.key)
-            if source_slot and source_slot.source != "placeholder":
-                slot.label = source_slot.label
-                slot.value_type = source_slot.value_type
-                slot.repeat = source_slot.repeat
-                slot.omit_when_empty = source_slot.omit_when_empty
-            elif slot.key in loop_iters:
-                slot.value_type = "list[object]"
-
         descriptor = docx_template.parsed_to_descriptor(parsed, name)
+        profile_data = await template_profile.build_template_profile(working_bytes, parsed, language="ru")
     except HTTPException:
         raise
     except Exception as e:
@@ -1205,7 +1184,7 @@ async def upload_template(
             json.dumps(descriptor["slots"], ensure_ascii=False),
             json.dumps(descriptor["schema_json"], ensure_ascii=False),
             json.dumps(descriptor["style_config"], ensure_ascii=False),
-            json.dumps({}, ensure_ascii=False),
+            json.dumps(profile_data, ensure_ascii=False),
             1 if descriptor["render_ready"] else 0,
             now,
         ))
@@ -1225,7 +1204,7 @@ async def delete_template(template_id: str):
     if template_id == "default-protocol-template":
         raise HTTPException(status_code=403, detail="Системный шаблон удалять нельзя")
     with get_db() as conn:
-        row = conn.execute("SELECT docx_path, source_docx_path, test_docx_path FROM protocol_templates WHERE id = ?", (template_id,)).fetchone()
+        row = conn.execute("SELECT docx_path, source_docx_path, test_docx_path, test_pdf_path FROM protocol_templates WHERE id = ?", (template_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Template not found")
 
@@ -1237,11 +1216,10 @@ async def delete_template(template_id: str):
             if detached:
                 conn.execute("UPDATE meetings SET template_id = '' WHERE template_id = ?", (template_id,))
         except Exception:
-            # meetings.template_id column may be missing on very old DBs; deletion still proceeds
             logger.warning("Could not detach meetings from template %s", template_id)
             detached = 0
 
-        for p in [row["docx_path"], row["source_docx_path"], row["test_docx_path"]]:
+        for p in [row["docx_path"], row["source_docx_path"], row["test_docx_path"], row["test_pdf_path"]]:
             if p and os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -1284,41 +1262,44 @@ async def test_template_run(template_id: str, req: Optional[TemplateTestRequest]
     with open(row["docx_path"], "rb") as f:
         docx_bytes = f.read()
 
-    parsed = docx_template.parse_docx_template(docx_bytes)
     slots_data = json.loads(row["slots"] or "[]")
-    # Propagate stored slot metadata
-    stored_slots_map = {s["key"]: s for s in slots_data}
-    loop_iters = docx_template._loop_iterables(docx_bytes)
-    for s in parsed.slots:
-        st = stored_slots_map.get(s.key)
-        if st:
-            s.label = st.get("label", s.label)
-            s.value_type = st.get("value_type", s.value_type)
-            s.repeat = st.get("repeat", s.repeat)
-            s.omit_when_empty = st.get("omit_when_empty", s.omit_when_empty)
-        elif s.key in loop_iters:
-            s.value_type = "list[object]"
+    working_bytes, parsed = docx_template.prepare_template_pipeline(docx_bytes, stored_slots=slots_data)
 
     test_transcript = (req.transcript.strip() if req and req.transcript else "") or template_generation.DEFAULT_TEST_TRANSCRIPT
     dl = (req.detail_level if req and req.detail_level else "") or row["detail_level"] or "concise"
 
-    # This endpoint evaluates the configured model. Never hide model failures behind
-    # mock values: the user must see the real model result or a clear error.
+    tpl_profile = json.loads(row["template_profile"] or "{}")
+    if not tpl_profile:
+        tpl_profile = template_profile.heuristic_template_profile(parsed, language="ru")
+
     generation_started = time.perf_counter()
+    values = None
     try:
-        values = await template_generation.generate_template_values(
+        gen_res = await template_protocol.generate(
             parsed=parsed,
-            additional_prompt=row["additional_prompt"] or "",
             transcript=test_transcript,
-            output_language="Russian",
+            additional_prompt=row["additional_prompt"] or "",
             detail_level=dl,
+            template_profile=tpl_profile,
+            output_language="Russian",
         )
+        values = gen_res.get("template_values") or {}
     except Exception as e:
-        logger.exception("LLM template test failed for template %s", template_id)
-        raise HTTPException(status_code=502, detail=f"Модель не смогла сформировать тестовый протокол: {e}") from e
+        logger.warning("template_protocol.generate failed (%s), falling back to template_generation.generate_template_values", e)
+        try:
+            values = await template_generation.generate_template_values(
+                parsed=parsed,
+                additional_prompt=row["additional_prompt"] or "",
+                transcript=test_transcript,
+                output_language="Russian",
+                detail_level=dl,
+            )
+        except Exception as gen_err:
+            logger.exception("LLM template test failed for template %s", template_id)
+            raise HTTPException(status_code=502, detail=f"Модель не смогла сформировать тестовый протокол: {gen_err}") from gen_err
 
     try:
-        rendered = docx_template.render_docx_template(docx_bytes, values, slots=parsed.slots)
+        rendered = docx_template.render_docx_template(working_bytes, values, slots=parsed.slots)
     except Exception as e:
         logger.exception("Render test docx failed for template %s", template_id)
         raise HTTPException(status_code=422, detail=f"Модель вернула данные, которые не удалось вставить в DOCX: {e}") from e
@@ -1327,12 +1308,27 @@ async def test_template_run(template_id: str, req: Optional[TemplateTestRequest]
     with open(test_docx_path, "wb") as f:
         f.write(rendered)
 
+    test_pdf_path = TEMPLATES_DIR / f"{template_id}_test.pdf"
+    try:
+        descriptor = docx_template.parsed_to_descriptor(parsed, row["name"])
+        test_pdf_bytes = pdf_export.build_template_test_pdf(row["name"], values, descriptor["slots"])
+        with open(test_pdf_path, "wb") as f:
+            f.write(test_pdf_bytes)
+    except Exception as pdf_err:
+        logger.warning("Failed to generate test PDF for template %s: %s", template_id, pdf_err)
+
+    has_pdf = os.path.exists(test_pdf_path)
     with get_db() as conn:
         conn.execute("""
             UPDATE protocol_templates
-            SET test_values = ?, test_docx_path = ?
+            SET test_values = ?, test_docx_path = ?, test_pdf_path = ?
             WHERE id = ?
-        """, (json.dumps(values, ensure_ascii=False), str(test_docx_path), template_id))
+        """, (
+            json.dumps(values, ensure_ascii=False),
+            str(test_docx_path),
+            str(test_pdf_path) if has_pdf else "",
+            template_id,
+        ))
         conn.commit()
 
     return {
@@ -1340,6 +1336,7 @@ async def test_template_run(template_id: str, req: Optional[TemplateTestRequest]
         "values": values,
         "slots_filled": len(values),
         "has_test_docx": True,
+        "has_test_pdf": has_pdf,
         "model": get_setting("llm_model", settings.LLM_MODEL),
         "generation_seconds": round(time.perf_counter() - generation_started, 2),
     }
@@ -1359,6 +1356,40 @@ async def download_template_test_file(template_id: str):
         row["test_docx_path"],
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=f"test_{row['name']}.docx",
+    )
+
+
+@app.get("/api/v1/templates/{template_id}/test-download-pdf")
+async def download_template_test_pdf(template_id: str):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM protocol_templates WHERE id = ?", (template_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+    pdf_path = row["test_pdf_path"] if "test_pdf_path" in row.keys() else ""
+    if pdf_path and os.path.exists(pdf_path):
+        return FileResponse(
+            pdf_path,
+            media_type="application/pdf",
+            filename=f"test_{row['name']}.pdf",
+        )
+
+    # If test_values exist, render on the fly
+    test_vals = json.loads(row["test_values"] or "{}")
+    if not test_vals:
+        raise HTTPException(status_code=404, detail="Тестовый протокол еще не сгенерирован. Запустите тестирование.")
+
+    slots = json.loads(row["slots"] or "[]")
+    pdf_bytes = pdf_export.build_template_test_pdf(row["name"], test_vals, slots)
+    clean_name = re.sub(r'[/\\?%*:|"<>]+', '-', row["name"]).strip() or "template"
+    utf8_filename = f"test_{clean_name}.pdf"
+    quoted = urllib.parse.quote(utf8_filename)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="test_{template_id[:8]}.pdf"; filename*=UTF-8\'\'{quoted}'
+        },
     )
 
 
@@ -1892,6 +1923,104 @@ async def save_docx_to_downloads(
                 subprocess.Popen(["xdg-open", str(downloads_dir)])
         except Exception as e:
             logger.warning("Failed to reveal file in folder: %s", e)
+
+    return {
+        "success": True,
+        "filename": final_filename,
+        "path": str(target_path),
+    }
+
+
+@app.get("/api/v1/meetings/{meeting_id}/export/pdf")
+async def export_pdf(
+    meeting_id: str,
+    lang: str = Query("ru", pattern="^(ru|kz)$"),
+):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+    pdf_bytes, title = pdf_export.build_meeting_protocol_pdf(dict(row), lang=lang)
+
+    export_path = EXPORTS_DIR / f"{meeting_id}_{lang}.pdf"
+    export_path.write_bytes(pdf_bytes)
+
+    clean_title = re.sub(r'[/\\?%*:|"<>]+', '-', title).strip() or f"meeting_{meeting_id[:8]}"
+    prefix = "Хаттама" if lang == "kz" else "Протокол"
+    lang_tag = "KZ" if lang == "kz" else "RU"
+    utf8_filename = f"{prefix} - {clean_title} ({lang_tag}).pdf"
+    ascii_fallback = f"Protocol_{meeting_id[:8]}_{lang}.pdf"
+    quoted_filename = urllib.parse.quote(utf8_filename)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quoted_filename}'
+    }
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers=headers,
+    )
+
+
+@app.post("/api/v1/meetings/{meeting_id}/export/pdf/save")
+async def save_pdf_to_downloads(
+    meeting_id: str,
+    req: SaveExportRequest = SaveExportRequest(),
+):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+    pdf_bytes, title = pdf_export.build_meeting_protocol_pdf(dict(row), lang=req.lang)
+
+    # Save cached copy
+    cached_path = EXPORTS_DIR / f"{meeting_id}_{req.lang}.pdf"
+    cached_path.write_bytes(pdf_bytes)
+
+    clean_title = re.sub(r'[/\\?%*:|"<>]+', '-', title).strip() or f"meeting_{meeting_id[:8]}"
+    prefix = "Хаттама" if req.lang == "kz" else "Протокол"
+    lang_tag = "KZ" if req.lang == "kz" else "RU"
+    base_name = f"{prefix} - {clean_title} ({lang_tag})"
+
+    downloads_dir = Path.home() / "Downloads"
+    if not downloads_dir.exists():
+        try:
+            downloads_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            downloads_dir = EXPORTS_DIR
+
+    final_filename = f"{base_name}.pdf"
+    target_path = downloads_dir / final_filename
+    counter = 1
+    while target_path.exists():
+        final_filename = f"{base_name} ({counter}).pdf"
+        target_path = downloads_dir / final_filename
+        counter += 1
+
+    target_path.write_bytes(pdf_bytes)
+
+    if req.open_file:
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(target_path)])
+            elif sys.platform == "win32":
+                os.startfile(str(target_path))
+            else:
+                subprocess.Popen(["xdg-open", str(target_path)])
+        except Exception as e:
+            logger.warning("Failed to open PDF file: %s", e)
+    elif req.open_folder:
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(target_path)])
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", f"/select,{str(target_path)}"])
+            else:
+                subprocess.Popen(["xdg-open", str(downloads_dir)])
+        except Exception as e:
+            logger.warning("Failed to reveal PDF in folder: %s", e)
 
     return {
         "success": True,
