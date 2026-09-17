@@ -11,11 +11,25 @@ dist-ssr
 dist-ssr/
 *.local
 
-# Tauri / Rust build outputs
+# Tauri / Rust build outputs & artifacts
 src-tauri/target
 src-tauri/target/
 **/target/
 **/target
+**/out_target/
+src-tauri/.cargo/
+.cargo/
+
+# Compiled binaries and installers
+*.exe
+*.msi
+*.dll
+*.pdb
+*.dmg
+*.app
+*.deb
+*.rpm
+*.appimage
 
 # Python & virtual environment
 __pycache__/
@@ -34,6 +48,19 @@ venv/
 /backend/data/**
 !/backend/data/**/
 !/backend/data/**/.gitkeep
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Environment and sensitive files
 .env
@@ -47,6 +74,9 @@ venv/
 ._*
 .Spotlight-V100
 .Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 *.tsbuildinfo
 .vscode/
 .idea/
