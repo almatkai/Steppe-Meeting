@@ -14,6 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import { SteppeLogo } from "../ui/SteppeIcon";
 import { useMeetingStore } from "../../store/useMeetingStore";
+import { cliModelName, cliStatus } from "../../utils/cliSettings";
 
 export const AppSidebar: React.FC = () => {
   const { currentView, setView, systemStatus, checkStatus, meetings, setMiniMode } = useMeetingStore();
@@ -26,6 +27,8 @@ export const AppSidebar: React.FC = () => {
 
   const ollamaOk = systemStatus?.ollama?.connected;
   const whisperOk = systemStatus?.whisper?.connected;
+  const cliMode = systemStatus?.llm_mode === 'cli';
+  const cli = systemStatus?.cli;
 
   return (
     <aside className="w-64 border-r border-neutral-800 bg-neutral-900/70 backdrop-blur-xl flex flex-col justify-between select-none">
@@ -131,15 +134,19 @@ export const AppSidebar: React.FC = () => {
           {/* LLM Status */}
           <div
             onClick={() => setView("settings")}
-            className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-neutral-900 border border-neutral-800/80 hover:border-neutral-700 cursor-pointer text-xs transition-colors"
+            className={`flex ${cliMode ? 'flex-col items-stretch gap-1' : 'items-center justify-between'} px-2.5 py-1.5 rounded-md bg-neutral-900 border border-neutral-800/80 hover:border-neutral-700 cursor-pointer text-xs transition-colors`}
           >
             <div className="flex items-center gap-2 truncate">
               <Cpu className="w-3.5 h-3.5 text-neutral-300 shrink-0" />
               <span className="text-neutral-300 truncate font-mono">
-                {systemStatus?.ollama?.model || "LLM"}
+                {cliMode ? cliModelName(systemStatus?.ollama?.model) : systemStatus?.ollama?.model || "LLM"}
               </span>
             </div>
-            {ollamaOk ? (
+            {cliMode ? (
+              <div title={cli?.error} className={`font-medium ${!cli ? 'text-neutral-400' : !cli.available ? 'text-rose-400' : cli.auth === 'required' ? 'text-amber-400' : cli.auth === 'authenticated' ? 'text-emerald-400' : 'text-neutral-400'}`}>
+                {cliStatus(cli)}
+              </div>
+            ) : ollamaOk ? (
               <div className="flex items-center gap-1 text-emerald-400 font-medium shrink-0">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                 <span>Active</span>

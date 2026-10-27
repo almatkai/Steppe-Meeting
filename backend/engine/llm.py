@@ -1,4 +1,4 @@
-"""Calling the language model.
+"""Calling the language model. CLI mode always uses one selected CLI.
 
 Two providers: a model hosted inside the network, and OpenAI. ``LLM_PRIMARY``
 decides which is tried first; the other is the fallback, so a local outage
@@ -278,8 +278,50 @@ def _parse(content: str) -> dict:
     return parsed
 
 
+async def _call_cli(messages, *, json_mode=False):
+    from . import cli_llm
+    provider = settings.LLM_CLI_PROVIDER
+    options = settings.LLM_CLI.get(provider, {})
+    call_id = uuid.uuid4().hex[:12]
+    started = time.monotonic()
+    details = {'call_id': call_id, 'provider': f'cli:{provider}', 'model': options.get('model', '')}
+    log_path = _call_log_path(call_id, f'cli-{provider}')
+    record = {**details, 'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'request': {'messages': messages, 'json_mode': json_mode}, 'response': None, 'error': None}
+    await _save_call_log(log_path, record)
+    await telemetry.emit('llm_started', **details, prompt_chars=sum(len(str(m.get('content', ''))) for m in messages))
+    try:
+        result = await cli_llm.complete(provider, options.get('path', ''), options.get('model', ''), messages,
+                                        json_mode=json_mode, timeout=settings.LLM_TIMEOUT)
+        record['response'] = result
+        await telemetry.emit('llm_completed', **details, elapsed_seconds=round(time.monotonic()-started, 2))
+        return result
+    except asyncio.CancelledError:
+        record['error'] = {'type': 'CancelledError', 'message': 'request cancelled'}
+        await telemetry.emit('llm_cancelled', **details)
+        raise
+    except Exception as error:
+        # Adapter diagnostics never include the prompt or raw inference output.
+        message = cli_llm.diagnostic(str(error)) if isinstance(error, (cli_llm.CLIError, ValueError)) else 'Не удалось запустить CLI'
+        record['error'] = {'type': type(error).__name__, 'message': message}
+        await telemetry.emit('llm_failed', **details, error_type=type(error).__name__)
+        raise LLMError(message) from None
+    finally:
+        record['elapsed_seconds'] = round(time.monotonic()-started, 2)
+        await _save_call_log(log_path, record)
+
+
+async def complete_messages(messages, temperature=0.3):
+    """One selected desktop provider; preserves roles for chat/edit endpoints."""
+    if settings.LLM_MODE == 'cli':
+        return await _call_cli(messages)
+    return await _call_local(messages, temperature, json_mode=False)
+
+
 async def complete_json(messages: list[dict], temperature: float = 0.1) -> dict:
     """Ask the model for a JSON object, trying both providers before failing."""
+    if settings.LLM_MODE == 'cli':
+        return _parse(await _call_cli(messages, json_mode=True))
     local = ('local', _call_local)
     openai = ('openai', _call_openai)
     if settings.OPENAI_API_KEY and settings.LLM_PRIMARY.lower() == 'openai':
@@ -320,6 +362,8 @@ async def complete_text(prompt: str, temperature: float = 0.5) -> str:
     streaming. Tries both providers before failing, the same fallback
     order complete_json and stream_chat already use."""
     messages = [{'role': 'user', 'content': prompt}]
+    if settings.LLM_MODE == 'cli':
+        return await _call_cli(messages)
     local = (
         'local',
         lambda: _call_local(messages, temperature, json_mode=False, max_tokens=300),
@@ -439,6 +483,15 @@ async def _stream_openai(messages: list, temperature: float):
         yield chunk
 
 
+async def stream_messages(messages, temperature=0.3):
+    """Desktop direct chat uses its selected provider without API fallbacks."""
+    if settings.LLM_MODE == 'cli':
+        yield await _call_cli(messages)
+        return
+    async for chunk in _stream_local(messages, temperature):
+        yield chunk
+
+
 async def stream_chat(
     messages: list[dict], temperature: float = 0.3,
 ) -> typing.AsyncIterator[str]:
@@ -450,6 +503,11 @@ async def stream_chat(
     different models is worse than an honest cutoff. See
     docs/superpowers/specs/2026-08-10-ai-chatbot-design.md section 5.
     """
+    if settings.LLM_MODE == 'cli':
+        # CLI adapters return only the completed assistant answer. No partial
+        # persistence on provider errors; callers retain their SSE envelope.
+        yield await _call_cli(messages)
+        return
     local = ('local', _stream_local)
     openai = ('openai', _stream_openai)
     if settings.OPENAI_API_KEY and settings.LLM_PRIMARY.lower() == 'openai':

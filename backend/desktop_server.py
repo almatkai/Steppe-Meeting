@@ -60,7 +60,7 @@ DB_PATH = DATA_DIR / "meetings.db"
 from engine.config import settings
 from live_captions import create_router as create_captions_router
 from recording_streams import RecordingStreams
-from engine import chunking, docx_template, docx_preview, template_generation, template_profile, template_protocol, pdf_export, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
+from engine import cli_llm, chunking, docx_template, docx_preview, template_generation, template_profile, template_protocol, pdf_export, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
 
 # LLM telemetry is runtime data too, not a repo-relative directory.
 settings.LLM_LOG_DIR = str(DATA_DIR / "logs" / "llm")
@@ -314,15 +314,6 @@ set_setting("whisper_base_url", DEFAULT_WHISPER_URL)
 set_setting("whisper_model", DEFAULT_WHISPER_MODEL)
 set_setting("whisper_api_key", DEFAULT_WHISPER_KEY)
 
-def get_chat_completions_url(base_url: str) -> str:
-    """Normalizes any provider base URL to the /chat/completions endpoint."""
-    url = (base_url or "").strip().rstrip("/")
-    if url.endswith("/chat/completions"):
-        return url
-    if url.endswith("/v1"):
-        return f"{url}/chat/completions"
-    return f"{url}/v1/chat/completions"
-
 def get_models_url(base_url: str) -> str:
     """Normalizes any provider base URL to the /models endpoint."""
     url = (base_url or "").strip().rstrip("/")
@@ -346,7 +337,18 @@ def get_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
         key = key[7:].strip()
     return {"Authorization": f"Bearer {key}"}
 
+def get_cli_config():
+    try:
+        value = json.loads(get_setting("llm_cli", "{}"))
+        return value if isinstance(value, dict) else {}
+    except ValueError:
+        return {}
+
+
 def sync_generation_settings():
+    settings.LLM_MODE = get_setting("llm_mode", "api")
+    settings.LLM_CLI_PROVIDER = get_setting("llm_cli_provider", "opencode")
+    settings.LLM_CLI = get_cli_config()
     llm_url = get_setting("llm_base_url", "http://localhost:11434/v1")
     llm_model = get_setting("llm_model", "qwen2.5:latest")
     llm_api_key = get_setting("llm_api_key", "")
@@ -423,7 +425,24 @@ class TemplateTestRequest(BaseModel):
     transcript: Optional[str] = None
     detail_level: Optional[str] = None
 
+class CliOptions(BaseModel):
+    path: Optional[str] = None
+    model: Optional[str] = None
+
+
+class CliRequest(BaseModel):
+    provider: str
+    path: Optional[str] = None
+
+
+class CliTestRequest(CliRequest):
+    model: Optional[str] = None
+
+
 class SystemConfigRequest(BaseModel):
+    llm_mode: Optional[str] = None
+    llm_cli_provider: Optional[str] = None
+    llm_cli: Optional[Dict[str, CliOptions]] = None
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
     llm_api_key: Optional[str] = None
@@ -1223,6 +1242,7 @@ async def upload_template(
     additional_prompt: Optional[str] = Form(""),
     detail_level: Optional[str] = Form("concise"),
 ):
+    sync_generation_settings()
     docx_bytes = await file.read()
     if len(docx_bytes) > 50 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Размер файла превышает лимит 50 МБ")
@@ -1424,7 +1444,7 @@ async def test_template_run(template_id: str, req: Optional[TemplateTestRequest]
         "slots_filled": len(values),
         "has_test_docx": True,
         "has_test_pdf": has_pdf,
-        "model": get_setting("llm_model", settings.LLM_MODEL),
+        "model": (get_cli_config().get(settings.LLM_CLI_PROVIDER, {}).get("model") or "CLI default") if settings.LLM_MODE == "cli" else get_setting("llm_model", settings.LLM_MODEL),
         "generation_seconds": round(time.perf_counter() - generation_started, 2),
     }
 
@@ -1487,12 +1507,6 @@ async def download_template_test_pdf(template_id: str):
 @app.post("/api/v1/chat")
 async def chat_assistant(req: ChatRequest):
     sync_generation_settings()
-    llm_url = get_setting("llm_base_url", "http://localhost:11434/v1").rstrip("/")
-    llm_model = get_setting("llm_model", "qwen2.5:latest")
-    api_key = get_setting("llm_api_key", "").strip()
-    chat_url = get_chat_completions_url(llm_url)
-    headers = get_auth_headers(api_key)
-
     context_parts = [
         "You are an expert AI meeting assistant. Answer questions concisely and professionally based on the meeting data.",
     ]
@@ -1521,27 +1535,10 @@ async def chat_assistant(req: ChatRequest):
 
     async def event_generator():
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                async with client.stream(
-                    "POST",
-                    chat_url,
-                    headers=headers,
-                    json={
-                        "model": llm_model,
-                        "messages": messages,
-                        "stream": True,
-                        "temperature": 0.3,
-                    },
-                ) as resp:
-                    if resp.status_code != 200:
-                        err_bytes = await resp.aread()
-                        err_msg = err_bytes.decode(errors="replace")[:300]
-                        yield f"data: {json.dumps({'error': f'LLM returned {resp.status_code}: {err_msg}'})}\n\n"
-                        return
-
-                    async for line in resp.aiter_lines():
-                        if line.startswith("data: "):
-                            yield f"{line}\n\n"
+            async for delta in llm.stream_messages(messages, temperature=0.3):
+                frame = {"choices": [{"delta": {"content": delta}}]}
+                yield f"data: {json.dumps(frame, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
@@ -1624,20 +1621,9 @@ async def send_session_message(session_id: str, req: SendSessionMessageRequest):
         if not session:
             raise HTTPException(status_code=404, detail="Chat session not found")
 
-        # 1. Save user message
+        # Stage the user message until generation succeeds. Failed/cancelled
+        # attempts can be retried without duplicating persisted conversation.
         user_msg_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, citations) VALUES (?, ?, ?, ?, ?)",
-            (user_msg_id, session_id, "user", content, None)
-        )
-
-        # 2. Auto-update session title if it is default
-        if session["title"] in ("Новый диалог", "New Chat", ""):
-            new_title = content[:45] + ("..." if len(content) > 45 else "")
-            conn.execute("UPDATE chat_sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_title, session_id))
-        else:
-            conn.execute("UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
-        conn.commit()
 
         # 3. Retrieve context & citations via RAG
         top_chunks, citations = await retriever.retrieve(
@@ -1652,13 +1638,15 @@ async def send_session_message(session_id: str, req: SendSessionMessageRequest):
             "SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC",
             (session_id,)
         ).fetchall()
-        history = [dict(r) for r in history_rows[:-1]]
+        history = [dict(r) for r in history_rows]
 
     # 5. Build prompt with RAG context
     prompt = retriever.build_rag_prompt(history, top_chunks, content)
 
     # 6. Stream SSE events
     sync_generation_settings()
+
+    cli_mode = settings.LLM_MODE == "cli"
 
     async def event_generator():
         # Frame 1: Citations event
@@ -1676,6 +1664,13 @@ async def send_session_message(session_id: str, req: SendSessionMessageRequest):
             with get_db() as conn:
                 conn.execute(
                     "INSERT INTO chat_messages (id, session_id, role, content, citations) VALUES (?, ?, ?, ?, ?)",
+                    (user_msg_id, session_id, "user", content, None),
+                )
+                if session["title"] in ("Новый диалог", "New Chat", ""):
+                    conn.execute("UPDATE chat_sessions SET title = ? WHERE id = ?",
+                                 (content[:45] + ("..." if len(content) > 45 else ""), session_id))
+                conn.execute(
+                    "INSERT INTO chat_messages (id, session_id, role, content, citations) VALUES (?, ?, ?, ?, ?)",
                     (asst_msg_id, session_id, "assistant", assistant_text, json.dumps(citations, ensure_ascii=False))
                 )
                 conn.execute("UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
@@ -1685,6 +1680,9 @@ async def send_session_message(session_id: str, req: SendSessionMessageRequest):
 
         except Exception as e:
             logger.warning("LLM generation stream failed: %s", e)
+            if cli_mode:
+                yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+                return
             if not assistant_text:
                 if citations:
                     fallback_text = (
@@ -1708,6 +1706,10 @@ async def send_session_message(session_id: str, req: SendSessionMessageRequest):
 
                 asst_msg_id = str(uuid.uuid4())
                 with get_db() as conn:
+                    conn.execute(
+                        "INSERT INTO chat_messages (id, session_id, role, content, citations) VALUES (?, ?, ?, ?, ?)",
+                        (user_msg_id, session_id, "user", content, None),
+                    )
                     conn.execute(
                         "INSERT INTO chat_messages (id, session_id, role, content, citations) VALUES (?, ?, ?, ?, ?)",
                         (asst_msg_id, session_id, "assistant", fallback_text, json.dumps(citations, ensure_ascii=False))
@@ -1736,12 +1738,6 @@ async def get_search_stats():
 @app.post("/api/v1/edit")
 async def edit_text(req: EditRequest):
     sync_generation_settings()
-    llm_url = get_setting("llm_base_url", "http://localhost:11434/v1").rstrip("/")
-    llm_model = get_setting("llm_model", "qwen2.5:latest")
-    api_key = get_setting("llm_api_key", "").strip()
-    chat_url = get_chat_completions_url(llm_url)
-    headers = get_auth_headers(api_key)
-
     system_prompt = (
         "You are an editorial assistant for official and business meeting protocols. "
         "Your job is to rewrite or correct the highlighted text according to the user's instructions. "
@@ -1751,24 +1747,14 @@ async def edit_text(req: EditRequest):
 
     user_prompt = f"Original text:\n\"\"\"\n{req.selected_text}\n\"\"\"\n\nInstruction:\n{req.instruction}\n\nEdited text:"
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            chat_url,
-            headers=headers,
-            json={
-                "model": llm_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.2,
-            },
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
-        data = resp.json()
-        edited = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        return {"edited_text": edited}
+    try:
+        edited = await llm.complete_messages([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ], temperature=0.2)
+        return {"edited_text": edited.strip()}
+    except llm.LLMError as error:
+        raise HTTPException(502, str(error)) from None
 
 # ---------------------------------------------------------------------------
 # DOCX Export & File Actions
@@ -2222,44 +2208,56 @@ async def system_status():
     ollama_models = []
     is_cloud_provider = any(domain in llm_url for domain in ("api.openai.com", "openrouter.ai", "api.groq.com", "api.deepseek.com"))
 
-    try:
-        async with httpx.AsyncClient(timeout=3.5) as client:
-            resp = await client.get(tags_url)
-            if resp.status_code == 200:
-                ollama_ok = True
-                data = resp.json()
-                ollama_models = [m.get("name") for m in data.get("models", []) if m.get("name")]
-            else:
-                resp2 = await client.get(models_url, headers=headers)
-                if resp2.status_code == 200:
+    cli_status = None
+    llm_mode = get_setting("llm_mode", "api")
+    if llm_mode == "cli":
+        provider = get_setting("llm_cli_provider", "opencode")
+        options = get_cli_config().get(provider, {})
+        cli_status = await cli_llm.check(provider, options.get("path", ""), cached=True)
+        ollama_err = cli_status.get("error", "")
+        ollama_ok = cli_status["available"]
+        model_ready = cli_status["auth"] == "authenticated"
+        llm_url = cli_status.get("path", provider)
+        current_model = options.get("model") or "CLI default"
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=3.5) as client:
+                resp = await client.get(tags_url)
+                if resp.status_code == 200:
                     ollama_ok = True
-                    data = resp2.json()
-                    ollama_models = [m.get("id") for m in data.get("data", []) if m.get("id")]
-                elif resp2.status_code in (401, 403):
-                    ollama_err = f"Ошибка авторизации ({resp2.status_code}): проверьте Bearer-токен / API ключ."
+                    data = resp.json()
+                    ollama_models = [m.get("name") for m in data.get("models", []) if m.get("name")]
                 else:
-                    ollama_err = f"Эндпоинт вернул код {resp2.status_code}"
-    except Exception as e:
-        ollama_err = str(e)
+                    resp2 = await client.get(models_url, headers=headers)
+                    if resp2.status_code == 200:
+                        ollama_ok = True
+                        data = resp2.json()
+                        ollama_models = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                    elif resp2.status_code in (401, 403):
+                        ollama_err = f"Ошибка авторизации ({resp2.status_code}): проверьте Bearer-токен / API ключ."
+                    else:
+                        ollama_err = f"Эндпоинт вернул код {resp2.status_code}"
+        except Exception as e:
+            ollama_err = str(e)
 
-    model_ready = False
-    if ollama_ok:
-        if is_cloud_provider:
-            model_ready = bool(api_key)
-            if not model_ready:
-                ollama_err = "Не указан API-ключ для внешнего провайдера"
-        else:
-            if ollama_models:
-                for m in ollama_models:
-                    # Exact match, or base match without :latest / tag
-                    if m == current_model or m.split(":")[0] == current_model.split(":")[0]:
-                        model_ready = True
-                        break
-            if not model_ready:
-                if not ollama_models:
-                    ollama_err = f"Ollama запущена, но нет скачанных моделей. Выполните: `ollama pull {current_model}`"
-                else:
-                    ollama_err = f"Модель '{current_model}' не скачана в Ollama. Выполните: `ollama pull {current_model}` (доступные: {', '.join(ollama_models)})"
+        model_ready = False
+        if ollama_ok:
+            if is_cloud_provider:
+                model_ready = bool(api_key)
+                if not model_ready:
+                    ollama_err = "Не указан API-ключ для внешнего провайдера"
+            else:
+                if ollama_models:
+                    for m in ollama_models:
+                        # Exact match, or base match without :latest / tag
+                        if m == current_model or m.split(":")[0] == current_model.split(":")[0]:
+                            model_ready = True
+                            break
+                if not model_ready:
+                    if not ollama_models:
+                        ollama_err = f"Ollama запущена, но нет скачанных моделей. Выполните: `ollama pull {current_model}`"
+                    else:
+                        ollama_err = f"Модель '{current_model}' не скачана в Ollama. Выполните: `ollama pull {current_model}` (доступные: {', '.join(ollama_models)})"
 
     whisper_mode = get_setting("whisper_mode", "local")
     whisper_url = get_setting("whisper_base_url", "http://localhost:8000/v1").rstrip("/")
@@ -2306,6 +2304,8 @@ async def system_status():
     }
 
     return {
+        "llm_mode": llm_mode,
+        **({"cli": cli_status} if cli_status else {}),
         "ollama": {
             "connected": ollama_ok and model_ready,
             "service_online": ollama_ok,
@@ -2415,6 +2415,9 @@ async def pull_model(req: PullModelRequest, background_tasks: BackgroundTasks):
 @app.get("/api/v1/system/config")
 async def get_config():
     return {
+        "llm_mode": get_setting("llm_mode", "api"),
+        "llm_cli_provider": get_setting("llm_cli_provider", "opencode"),
+        "llm_cli": get_cli_config(),
         "llm_base_url": get_setting("llm_base_url", "http://localhost:11434/v1"),
         "llm_model": get_setting("llm_model", "qwen2.5:latest"),
         "llm_api_key": get_setting("llm_api_key", ""),
@@ -2428,31 +2431,66 @@ async def get_config():
 
 @app.post("/api/v1/system/config")
 async def save_config(req: SystemConfigRequest):
-    if req.whisper_local_model is not None:
-        try:
-            whisper_service.get_model_info(req.whisper_local_model.strip())
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-    if req.llm_base_url is not None:
-        set_setting("llm_base_url", req.llm_base_url.strip())
-    if req.llm_model is not None:
-        set_setting("llm_model", req.llm_model.strip())
-    if req.llm_api_key is not None:
-        set_setting("llm_api_key", req.llm_api_key.strip())
-    if req.whisper_mode is not None:
-        set_setting("whisper_mode", req.whisper_mode.strip())
-    if req.whisper_local_model is not None:
-        set_setting("whisper_local_model", req.whisper_local_model.strip())
-    if req.whisper_device is not None:
-        set_setting("whisper_device", req.whisper_device.strip())
-    if req.whisper_base_url is not None:
-        set_setting("whisper_base_url", req.whisper_base_url.strip())
-    if req.whisper_model is not None:
-        set_setting("whisper_model", req.whisper_model.strip())
-    if req.whisper_api_key is not None:
-        set_setting("whisper_api_key", req.whisper_api_key.strip())
+    # Validate the entire proposed state before the transaction; inactive legacy
+    # fields are retained and are not blockers when switching generation mode.
+    current = await get_config()
+    updates = req.model_dump(exclude_none=True)
+    for key, value in list(updates.items()):
+        if isinstance(value, str):
+            updates[key] = value.strip()
+    if "llm_cli" in updates:
+        merged = current["llm_cli"].copy()
+        for provider, options in updates["llm_cli"].items():
+            merged[provider] = {**merged.get(provider, {}), **{k: v.strip() for k, v in options.items() if v is not None}}
+        updates["llm_cli"] = merged
+    proposed = {**current, **updates}
+    try:
+        if proposed["llm_mode"] not in ("api", "cli"):
+            raise ValueError("Неизвестный способ генерации")
+        if proposed["llm_cli_provider"] not in cli_llm.PROVIDERS:
+            raise ValueError("Неизвестный CLI провайдер")
+        if any(provider not in cli_llm.PROVIDERS for provider in proposed["llm_cli"]):
+            raise ValueError("Неизвестный CLI провайдер")
+        if proposed["llm_mode"] == "cli":
+            provider = proposed["llm_cli_provider"]
+            options = proposed["llm_cli"].get(provider, {})
+            cli_llm.validate(provider, options.get("path", ""), options.get("model", ""), require_model=True)
+        else:
+            url = urllib.parse.urlparse(proposed["llm_base_url"])
+            if url.scheme not in ("http", "https") or not url.netloc:
+                raise ValueError("Укажите полный HTTP URL провайдера")
+            if not proposed["llm_model"].strip():
+                raise ValueError("Укажите модель для генерации")
+        if proposed["whisper_mode"] == "local":
+            whisper_service.get_model_info(proposed["whisper_local_model"])
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+    with get_db() as conn:
+        for key, value in updates.items():
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                         (key, json.dumps(value, ensure_ascii=False) if key == "llm_cli" else value))
+        conn.commit()
     sync_generation_settings()
     return {"success": True}
+
+
+@app.post("/api/v1/system/cli/check")
+async def check_cli(req: CliRequest):
+    try:
+        return await cli_llm.check(req.provider, (req.path or "").strip())
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+
+
+@app.post("/api/v1/system/cli/models")
+async def cli_models(req: CliRequest):
+    return await cli_llm.models(req.provider, (req.path or "").strip())
+
+
+@app.post("/api/v1/system/cli/test")
+async def test_cli(req: CliTestRequest):
+    return await cli_llm.test(req.provider, (req.path or "").strip(), (req.model or "").strip())
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("DESKTOP_API_PORT", 8008))

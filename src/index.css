@@ -104,3 +104,16 @@ html.mini-mode #root {
 .mini-captions-text { height: 28px; overflow-y: auto; font-size: 10.5px; line-height: 14px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .mini-error-banner { height: 32px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 0 8px; background: rgba(45, 15, 18, 0.96); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(244, 63, 94, 0.35); border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45); }
 .mini-shell button:focus-visible { outline: 1.5px solid #d4d4d4; outline-offset: 1px; }
+
+/* CLI settings follow Mini's neutral focus rule, including native radios. */
+.cli-settings :is(button, input, select, summary):focus-visible {
+  outline: 1.5px solid #d4d4d4;
+  outline-offset: 3px;
+}
+.cli-settings label:has(input[type="radio"]:focus-visible) {
+  outline: 1.5px solid #d4d4d4;
+  outline-offset: 2px;
+}
+.cli-settings input[type="radio"], .cli-settings input[type="checkbox"] {
+  accent-color: #a3a3a3;
+}

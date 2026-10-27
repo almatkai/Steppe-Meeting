@@ -140,7 +140,23 @@ export interface WhisperStatus {
   };
 }
 
+export type CliProviderId = 'opencode' | 'codex' | 'claude' | 'antigravity';
+export interface CliOptions { path?: string; model?: string }
+export interface CliCheckResult {
+  provider: CliProviderId; available: boolean; path?: string; configured_path?: string; version?: string;
+  auth: 'authenticated' | 'required' | 'unknown'; supports_models: boolean;
+  error?: string; checked_at: string;
+}
+export interface CliModelsResult {
+  provider: CliProviderId;
+  models: Array<{ id: string; name?: string; provider?: string; free: boolean | null }>;
+  fetched_at: string; pricing_available: boolean; error?: string;
+}
+export interface CliTestResult { ok: boolean; response?: string; elapsed_ms: number; error?: string }
+
 export interface SystemStatus {
+  cli?: CliCheckResult;
+  llm_mode?: string;
   ollama: {
     connected: boolean;
     service_online?: boolean;
@@ -154,6 +170,9 @@ export interface SystemStatus {
 }
 
 export interface SystemConfig {
+  llm_mode: 'api' | 'cli';
+  llm_cli_provider: CliProviderId;
+  llm_cli: Partial<Record<CliProviderId, CliOptions>>;
   llm_base_url: string;
   llm_model: string;
   llm_api_key?: string;

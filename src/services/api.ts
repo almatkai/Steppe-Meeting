@@ -1,3 +1,4 @@
+import type { CliProviderId, CliCheckResult, CliModelsResult, CliTestResult } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import type { CaptionChunk, CaptionResult, StreamingTranscript } from "../utils/liveCaptions";
 import type { Meeting, Participant, SystemConfig, SystemStatus, WhisperStatus, ChatSession, ChatMessage, Citation, ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../types";
@@ -25,6 +26,7 @@ async function backendFetch(url: string, options: RequestInit = {}): Promise<Res
   } catch (error) {
     backendReady = undefined;
     if (error instanceof Error && error.name === "TimeoutError") {
+      if (url.includes('/system/cli/')) throw error;
       throw new Error("Локальный сервер не ответил вовремя. Повторите подключение.");
     }
     if (error instanceof TypeError) {
@@ -258,13 +260,26 @@ export const api = {
     return res.json();
   },
 
+  async checkCli(provider: CliProviderId, path?: string): Promise<CliCheckResult> {
+    return cliAction("check", { provider, path });
+  },
+  async cliModels(provider: CliProviderId, path?: string): Promise<CliModelsResult> {
+    return cliAction("models", { provider, path });
+  },
+  async testCli(provider: CliProviderId, path?: string, model?: string): Promise<CliTestResult> {
+    return cliAction("test", { provider, path, model });
+  },
+
   async saveConfig(config: Partial<SystemConfig>): Promise<any> {
     const res = await backendFetch(`${API_BASE}/system/config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
     });
-    if (!res.ok) throw new Error(`Failed to save config: ${res.statusText}`);
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.detail || `Failed to save config: ${res.statusText}`);
+    }
     return res.json();
   },
 
@@ -612,3 +627,26 @@ export const api = {
     return res.json();
   },
 };
+
+async function cliAction(action: string, values: object) {
+  // Include the backend's model budget and session cleanup in the deadline.
+  const timeoutMs = action === 'test' ? 75000 : 20000;
+  try {
+    const res = await backendFetch(`${API_BASE}/system/cli/${action}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    let body;
+    try { body = await res.json(); }
+    catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') throw error;
+      throw new Error(res.ok ? 'CLI вернул некорректный ответ. Повторите действие.' : `Не удалось выполнить действие CLI (HTTP ${res.status}). Повторите действие.`);
+    }
+    if (!res.ok) throw new Error(typeof body?.detail === 'string' ? body.detail : `Не удалось выполнить действие CLI (HTTP ${res.status})`);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('CLI вернул некорректный ответ. Повторите действие.');
+    return body;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') throw new Error(`CLI не ответил за ${timeoutMs / 1000} с. Повторите действие.`);
+    throw error;
+  }
+}

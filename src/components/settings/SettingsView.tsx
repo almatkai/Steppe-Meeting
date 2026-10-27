@@ -18,14 +18,17 @@ import {
   List,
   HardDrive,
   Globe,
+  Terminal,
   DownloadSimple as Download,
   Trash as Trash2,
   CircleNotch as Loader2,
 } from "@phosphor-icons/react";
+import { CliSettings } from "./CliSettings";
+import { cliCheckKey, cliKey, cliStatus, cliValidation } from "../../utils/cliSettings";
 import { api } from "../../services/api";
 import { useMeetingStore } from "../../store/useMeetingStore";
 import { TemplateManager } from "../templates/TemplateManager";
-import type { SystemConfig, SystemStatus, WhisperStatus } from "../../types";
+import type { CliCheckResult, SystemConfig, SystemStatus, WhisperStatus } from "../../types";
 
 interface WhisperPreset {
   id: string;
@@ -119,6 +122,9 @@ export const SettingsView: React.FC = () => {
   const { systemStatus, checkStatus } = useMeetingStore();
 
   const [config, setConfig] = useState<SystemConfig>({
+    llm_mode: "api",
+    llm_cli_provider: "opencode",
+    llm_cli: {},
     llm_base_url: "http://localhost:11434/v1",
     llm_model: "qwen2.5:latest",
     llm_api_key: "",
@@ -130,6 +136,17 @@ export const SettingsView: React.FC = () => {
     whisper_api_key: "",
   });
 
+  const [cliChecks, setCliChecks] = useState<Record<string, CliCheckResult>>({});
+  useEffect(() => {
+    const check = systemStatus?.llm_mode === 'cli' ? systemStatus.cli : undefined;
+    if (!check) return;
+    setCliChecks(previous => {
+      const key = cliCheckKey(check);
+      // Preserve a newer explicit check when a cached status poll completes.
+      if (previous[key] && Date.parse(previous[key].checked_at) >= Date.parse(check.checked_at)) return previous;
+      return { ...previous, [key]: check };
+    });
+  }, [systemStatus]);
   const [loadError, setLoadError] = useState("");
   const [whisperError, setWhisperError] = useState("");
   const [isLoadingWhisper, setIsLoadingWhisper] = useState(true);
@@ -163,16 +180,20 @@ export const SettingsView: React.FC = () => {
       setConfig((prev) => ({
         ...prev,
         ...cfg,
+        llm_mode: cfg.llm_mode || "api",
+        llm_cli_provider: cfg.llm_cli_provider || "opencode",
+        llm_cli: cfg.llm_cli || {},
         whisper_mode: cfg.whisper_mode || "local",
         whisper_local_model: cfg.whisper_local_model || "small",
         whisper_device: cfg.whisper_device || "auto",
       }));
+      if ((cfg.llm_mode || "api") === "api") void fetchModels();
       setSettingsLoaded(true);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }
     // STT discovery must not wait for a remote LLM provider's model listing.
-    await Promise.allSettled([fetchModels(), checkStatus(), fetchWhisperStatus()]);
+    await Promise.allSettled([checkStatus(), fetchWhisperStatus()]);
   };
 
   const fetchWhisperStatus = async () => {
@@ -276,11 +297,12 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleSave = async () => {
+    if (cliValidation(config)) return;
     try {
       setIsSaving(true);
       await api.saveConfig(config);
       await checkStatus();
-      await fetchModels();
+      if (config.llm_mode === "api") await fetchModels();
       await fetchWhisperStatus();
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2500);
@@ -291,6 +313,8 @@ export const SettingsView: React.FC = () => {
     }
   };
 
+  const activeCliCheck = cliChecks[cliKey(config)];
+  const cliError = cliValidation(config);
   const ollamaOk = systemStatus?.ollama?.connected;
   const ollamaErr = systemStatus?.ollama?.error;
   const whisperOk = systemStatus?.whisper?.connected;
@@ -328,7 +352,11 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
 
-            {ollamaOk ? (
+            {config.llm_mode === "cli" ? (
+              <span className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full border ${activeCliCheck?.available && activeCliCheck.auth === "authenticated" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" : activeCliCheck?.auth === "required" ? "text-amber-400 bg-amber-500/10 border-amber-500/20" : activeCliCheck && !activeCliCheck.available ? "text-rose-400 bg-rose-500/10 border-rose-500/20" : "text-neutral-400 border-neutral-700"}`}>
+                {cliStatus(activeCliCheck)}
+              </span>
+            ) : ollamaOk ? (
               <span className="flex items-center gap-1 text-emerald-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span>Подключено</span>
@@ -346,6 +374,18 @@ export const SettingsView: React.FC = () => {
             )}
           </div>
 
+          <div role="radiogroup" aria-label="Способ генерации" className="cli-settings grid grid-cols-2 p-1 rounded-xl bg-neutral-950 border border-neutral-800">
+            {([['api', 'API (HTTP)', Globe], ['cli', 'Локальный CLI', Terminal]] as const).map(([mode, label, Icon]) => (
+              <label key={mode} className={`min-h-9 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs cursor-pointer ${config.llm_mode === mode ? 'bg-white text-neutral-950 font-semibold shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800/50'}`}>
+                <input className="sr-only" type="radio" name="llm-mode" value={mode} checked={config.llm_mode === mode} onChange={() => setConfig({ ...config, llm_mode: mode })} />
+                <Icon className="w-3.5 h-3.5 shrink-0" />{label}
+              </label>
+            ))}
+          </div>
+          {config.llm_mode === 'cli' ? (
+            <CliSettings config={config} onChange={setConfig} checks={cliChecks}
+              onCheck={(key, result) => setCliChecks(prev => ({ ...prev, [key]: result }))} />
+          ) : (<>
           {/* Connection error or model missing message if any */}
           {!ollamaOk && ollamaErr && (
             <div className={`p-2.5 rounded-xl border text-[11px] leading-relaxed ${
@@ -497,6 +537,7 @@ export const SettingsView: React.FC = () => {
               </p>
             </div>
           </div>
+          </>)}
         </div>
 
         {/* Whisper Section */}
@@ -873,7 +914,7 @@ export const SettingsView: React.FC = () => {
         <button
           type="button"
           onClick={handleSave}
-          disabled={isSaving || !settingsLoaded}
+          disabled={isSaving || !settingsLoaded || !!cliError}
           className="flex items-center gap-2 py-2.5 px-6 rounded-xl bg-white hover:bg-neutral-200 text-neutral-950 text-xs font-semibold transition-all shadow-md  active:scale-95 disabled:opacity-50"
         >
           {saveSuccess ? (

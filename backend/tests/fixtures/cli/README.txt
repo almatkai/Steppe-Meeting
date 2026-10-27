@@ -1,0 +1,1 @@
+OpenCode v2.1.4: real `models` IDs and whitelisted /api/model display/cost metadata, 2026-10-27. No provider settings, headers, account IDs or credentials. Other reply fixtures in test_cli_llm.py use the documented JSON envelopes, without paid live calls.

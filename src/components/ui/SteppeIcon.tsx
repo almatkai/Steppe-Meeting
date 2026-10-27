@@ -54,7 +54,7 @@ export const SteppeLogo: React.FC<{
       aria-label="Steppe Meeting"
     >
       {/* Solid squircle base */}
-      <rect x="1" y="1" width="46" height="46" rx="13" fill="#404040" />
+      <rect x="1" y="1" width="46" height="46" rx="13" fill="#141414" />
       {/* inner border */}
       <rect
         x="1.5"
@@ -64,7 +64,7 @@ export const SteppeLogo: React.FC<{
         rx="12"
         fill="none"
         stroke="#FFFFFF"
-        strokeOpacity="0.22"
+        strokeOpacity="0.14"
         strokeWidth="1"
       />
 

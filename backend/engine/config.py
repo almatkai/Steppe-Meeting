@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     APP_NAME: str = "Steppe Meeting"
 
+    LLM_MODE: str = "api"
+    LLM_CLI_PROVIDER: str = "opencode"
+    LLM_CLI: dict[str, dict[str, str]] = {}
+
     # Local LLM (Ollama or OpenAI-compatible)
     LLM_BASE_URL: str = "http://localhost:11434/v1"
     LLM_API_KEY: str = ""
