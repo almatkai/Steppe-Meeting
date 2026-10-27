@@ -303,10 +303,14 @@ class CLIAPITests(unittest.TestCase):
         with patch.object(cli_llm, 'resolve', return_value='/fake/opencode'), \
              patch.object(opencode_proxy, 'request', AsyncMock(return_value=(0, reply, ''))) as call, \
              patch.object(server.indexer, 'index_meeting', AsyncMock()):
-            response = self.client.post(f'/api/v1/meetings/{meeting}/generate')
-            self.assertEqual(response.status_code, 200)
-            generated = self.client.get(f'/api/v1/meetings/{meeting}').json()
-            self.assertEqual(generated['status'], 'completed', generated.get('error_message'))
+            async def generate_and_wait():
+                async with server.httpx.AsyncClient(transport=server.httpx.ASGITransport(app=server.app), base_url='http://test') as client:
+                    response = await client.request('POST', f'/api/v1/meetings/{meeting}/generate')
+                    self.assertEqual(response.status_code, 200)
+                    await server.generation_jobs.jobs[meeting].task
+                    generated = (await client.get(f'/api/v1/meetings/{meeting}')).json()
+                    self.assertEqual(generated['status'], 'completed', generated.get('error_message'))
+            asyncio.run(generate_and_wait())
             self.assertGreater(call.await_count, 3)
         # Real DOCX upload enters profile inference through the same adapter.
         from docx import Document

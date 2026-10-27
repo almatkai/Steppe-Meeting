@@ -70,7 +70,7 @@ export interface Meeting {
   id: string;
   title: string;
   created_at: string;
-  status: 'draft' | 'transcribing' | 'transcribed' | 'generating' | 'completed' | 'error';
+  status: 'draft' | 'transcribing' | 'transcribed' | 'generating' | 'cancelling' | 'cancelled' | 'completed' | 'error';
   duration_seconds: number;
   source_language: string;
   agenda: string;

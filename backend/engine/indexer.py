@@ -132,7 +132,7 @@ def _extract_summary_text(summary_raw: Any) -> str:
     return "\n".join(lines)
 
 
-async def index_meeting(meeting_id: str, conn) -> int:
+async def index_meeting(meeting_id: str, conn, *, check_current=None) -> int:
     """
     Builds search chunks for a single meeting (protocol, summary, transcript),
     calculates vector embeddings, and stores them in SQLite vector_store.
@@ -214,6 +214,8 @@ async def index_meeting(meeting_id: str, conn) -> int:
     texts = [c["text"] for c in chunks_to_index]
     vectors = await embeddings.embed_texts(texts)
 
+    if check_current is not None:
+        check_current()
     indexed_count = vector_store.upsert_chunks(
         conn=conn,
         meeting_id=meeting_id,

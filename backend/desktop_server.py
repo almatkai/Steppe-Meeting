@@ -5,7 +5,7 @@ and local Ollama / OpenAI-compatible LLM endpoints.
 """
 
 import asyncio
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 import json
 import io
 import logging
@@ -60,6 +60,7 @@ DB_PATH = DATA_DIR / "meetings.db"
 from engine.config import settings
 from live_captions import create_router as create_captions_router
 from recording_streams import RecordingStreams
+from generation_jobs import GenerationJobs
 from release_updates import checker as update_checker
 from engine import cli_llm, chunking, docx_template, docx_preview, template_generation, template_profile, template_protocol, pdf_export, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
 
@@ -370,7 +371,35 @@ sync_generation_settings()
 # FastAPI Application
 # ---------------------------------------------------------------------------
 
+def write_generation_status(meeting_id, status, error):
+    with get_db() as conn:
+        conn.execute("UPDATE meetings SET status=?, error_message=? WHERE id=?", (status, error, meeting_id))
+        conn.commit()
+
+
+generation_jobs = GenerationJobs(write_generation_status)
+
+
+def recover_orphaned_generations():
+    # No owned task survives process restart; never pretend it is still running.
+    with get_db() as conn:
+        conn.execute("UPDATE meetings SET status='cancelled', error_message='' WHERE status IN ('generating', 'cancelling')")
+        conn.execute("UPDATE meetings SET status='error', error_message=? WHERE status='transcribing'",
+                     ("Распознавание прервано перезапуском приложения. Аудио сохранено; запустите обработку заново.",))
+        conn.commit()
+
+
+@asynccontextmanager
+async def lifespan(app):
+    recover_orphaned_generations()
+    try:
+        yield
+    finally:
+        await generation_jobs.shutdown()
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Meeting Protocol Desktop API",
     version="1.0.0",
     description="Local backend engine for meeting protocol and summary generation",
@@ -540,7 +569,7 @@ class RecordingCompletionRequest(BaseModel):
 
 
 @app.post("/api/v1/meetings/{meeting_id}/process-recording")
-async def process_recording(meeting_id: str, background_tasks: BackgroundTasks, request: Optional[RecordingCompletionRequest] = None):
+async def process_recording(meeting_id: str, request: Optional[RecordingCompletionRequest] = None):
     """Finalize the saved streaming transcript, then generate without another STT pass."""
     with get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -550,34 +579,32 @@ async def process_recording(meeting_id: str, background_tasks: BackgroundTasks, 
         if request is None:
             # Installed clients may outlive a backend update. Never silently
             # re-transcribe their audio; allow retry only when text already exists.
-            if row["status"] in ("generating", "completed") and (row["transcript_text"] or "").strip():
+            if row["status"] in ("generating", "cancelling", "cancelled", "completed", "error") and (row["transcript_text"] or "").strip():
                 return {"meeting_id": meeting_id, "status": row["status"]}
             raise HTTPException(409, "Эта запись начата в старой версии Mini. Аудио сохранено в истории. Обновите приложение; запись можно восстановить из сохранённого аудио.")
         session = conn.execute("SELECT finalized FROM recording_streams WHERE id=? AND meeting_id=?",
                                (request.session_id, meeting_id)).fetchone()
         if not session:
             raise HTTPException(409, "Транскрипт этой записи не найден.")
-        if session["finalized"] and row["status"] in ("generating", "completed"):
+        if session["finalized"] and (row["error_message"] or "").startswith("Запись сброшена."):
+            raise HTTPException(409, "Запись сброшена. Начните новую запись в Mini.")
+        if session["finalized"] == 1:
             return {"meeting_id": meeting_id, "status": row["status"]}
+        if generation_jobs.active(meeting_id) or row["status"] == "transcribing":
+            raise HTTPException(409, "Обработка совещания уже выполняется.")
         audio_path = row["audio_path"]
         if not audio_path or not os.path.isfile(audio_path) or os.path.getsize(audio_path) == 0:
             raise HTTPException(400, "Аудиозапись не сохранена или пуста.")
         recording_streams.prepare_completion(conn, meeting_id, request.session_id,
                                              request.chunk_count, request.duration_seconds)
         conn.commit()
-    background_tasks.add_task(run_recording_pipeline, meeting_id)
+    generation_jobs.start(meeting_id, run_recording_pipeline)
     return {"meeting_id": meeting_id, "status": "generating"}
 
 
 async def run_recording_pipeline(meeting_id: str):
-    try:
-        sync_generation_settings()
-        await run_generation(meeting_id)
-    except Exception as error:
-        logger.exception("Recording generation failed for %s", meeting_id)
-        with get_db() as conn:
-            conn.execute("UPDATE meetings SET status='error', error_message=? WHERE id=?", (str(error), meeting_id))
-            conn.commit()
+    sync_generation_settings()
+    await run_generation(meeting_id)
 
 
 @app.post("/api/v1/meetings/{meeting_id}/transcribe")
@@ -586,6 +613,13 @@ async def transcribe_meeting(meeting_id: str, background_tasks: BackgroundTasks,
         row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Meeting not found")
+        # Mini retries acknowledge an accepted job without another STT/LLM pass.
+        if auto_generate and (row["status"] == "transcribing" or (
+            row["status"] in ("generating", "cancelling", "cancelled", "completed", "error") and row["transcript_text"]
+        )):
+            return {"meeting_id": meeting_id, "status": row["status"]}
+        if generation_jobs.active(meeting_id) or row["status"] == "transcribing":
+            raise HTTPException(409, "Обработка совещания уже выполняется.")
         audio_path = row["audio_path"]
         if not audio_path or not os.path.exists(audio_path):
             raise HTTPException(status_code=400, detail="No audio file uploaded for this meeting")
@@ -708,12 +742,8 @@ async def run_transcription(meeting_id: str, audio_path: str, auto_generate: boo
         logger.info("Transcription completed for meeting %s (%d segments, duration: %.1fs)", meeting_id, len(segments), total_duration)
 
         if auto_generate:
-            logger.info("Auto-generating protocol for meeting %s after transcription", meeting_id)
-            with get_db() as conn:
-                conn.execute("UPDATE meetings SET status = 'generating', error_message = '' WHERE id = ?", (meeting_id,))
-                conn.commit()
-            sync_generation_settings()
-            await run_generation(meeting_id)
+            # Handoff is synchronous: once generating is visible, Stop has an owner.
+            generation_jobs.start(meeting_id, run_recording_pipeline)
 
     except Exception as e:
         logger.exception("Transcription failed for meeting %s: %s", meeting_id, e)
@@ -724,22 +754,51 @@ async def run_transcription(meeting_id: str, audio_path: str, auto_generate: boo
             conn.commit()
 
 @app.post("/api/v1/meetings/{meeting_id}/generate")
-async def generate_meeting(meeting_id: str, background_tasks: BackgroundTasks):
-    sync_generation_settings()
+async def generate_meeting(meeting_id: str):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Meeting not found")
-        if not row["transcript_text"]:
-            raise HTTPException(status_code=400, detail="Meeting has no transcript to generate from")
-
-        conn.execute("UPDATE meetings SET status = 'generating', error_message = '' WHERE id = ?", (meeting_id,))
-        conn.commit()
-
-    background_tasks.add_task(run_generation, meeting_id)
+            raise HTTPException(404, "Meeting not found")
+        if generation_jobs.active(meeting_id) or row["status"] == "transcribing":
+            raise HTTPException(409, "Обработка совещания уже выполняется.")
+        if not (row["transcript_text"] or "").strip():
+            raise HTTPException(400, "Meeting has no transcript to generate from")
+    generation_jobs.start(meeting_id, run_recording_pipeline)
     return {"meeting_id": meeting_id, "status": "generating"}
 
+
+@app.post("/api/v1/meetings/{meeting_id}/stop-generation")
+async def stop_generation(meeting_id: str):
+    with get_db() as conn:
+        if not conn.execute("SELECT id FROM meetings WHERE id=?", (meeting_id,)).fetchone():
+            raise HTTPException(404, "Meeting not found")
+    try:
+        await generation_jobs.stop(meeting_id)
+    except TimeoutError as error:
+        raise HTTPException(504, str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(500, str(error)) from error
+    with get_db() as conn:
+        status = conn.execute("SELECT status FROM meetings WHERE id=?", (meeting_id,)).fetchone()["status"]
+    return {"meeting_id": meeting_id, "status": status}
+
+
+def save_generation_results(meeting_id, results):
+    """Publish one coherent generation; cancellation/errors retain the prior set."""
+    generation_jobs.check(meeting_id)
+    fields = ("protocol_ru", "protocol_kz", "summary_ru", "summary_kz", "template_values_ru", "template_values_kz")
+    if set(results) != set(fields):
+        raise ValueError("Incomplete generation results")
+    with get_db() as conn:
+        conn.execute("""UPDATE meetings SET protocol_ru=?, protocol_kz=?, summary_ru=?, summary_kz=?,
+                     template_values_ru=?, template_values_kz=?, status='completed', error_message='' WHERE id=?""",
+                     (*[json.dumps(results[field], ensure_ascii=False) for field in fields], meeting_id))
+        conn.commit()
+    generation_jobs.mark_committed(meeting_id)
+
+
 async def run_generation(meeting_id: str):
+    generation_jobs.check(meeting_id)
     logger.info("Starting protocol & summary generation for meeting %s", meeting_id)
     with get_db() as conn:
         row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
@@ -754,127 +813,105 @@ async def run_generation(meeting_id: str):
         for p in raw_participants if p.get('name')
     ] or None
 
-    try:
-        # Step 1: Russian Protocol
-        logger.info("Generating Russian protocol...")
-        protocol_ru = await protocol.generate(
-            transcript_text=transcript_text,
-            participants=participants,
-            agenda=agenda,
-        )
+    generation_jobs.check(meeting_id)
+    # Step 1: Russian Protocol
+    logger.info("Generating Russian protocol...")
+    protocol_ru = await protocol.generate(
+        transcript_text=transcript_text,
+        participants=participants,
+        agenda=agenda,
+    )
 
-        # Step 2: Kazakh Protocol Translation
-        logger.info("Translating protocol to Kazakh...")
-        protocol_kz = await protocol._translate(
-            protocol_ru=protocol_ru,
-            system_prompt=prompts.TRANSLATE_PROTOCOL_SYSTEM,
-            language_name="Kazakh",
-            has_agenda=agenda is not None,
-        )
 
-        # Step 3: Russian Summary
-        logger.info("Generating Russian summary...")
-        summary_ru = await summary.generate(transcript_text=transcript_text)
+    generation_jobs.check(meeting_id)
+    # Step 2: Kazakh Protocol Translation
+    logger.info("Translating protocol to Kazakh...")
+    protocol_kz = await protocol._translate(
+        protocol_ru=protocol_ru,
+        system_prompt=prompts.TRANSLATE_PROTOCOL_SYSTEM,
+        language_name="Kazakh",
+        has_agenda=agenda is not None,
+    )
 
-        # Step 4: Kazakh Summary Translation
-        logger.info("Translating summary to Kazakh...")
-        summary_kz = await summary.translate(summary_ru=summary_ru)
 
-        with get_db() as conn:
-            conn.execute("""
-                UPDATE meetings 
-                SET status = 'completed',
-                    protocol_ru = ?,
-                    protocol_kz = ?,
-                    summary_ru = ?,
-                    summary_kz = ?,
-                    error_message = ''
-                WHERE id = ?
-            """, (
-                json.dumps(protocol_ru, ensure_ascii=False),
-                json.dumps(protocol_kz, ensure_ascii=False),
-                json.dumps(summary_ru, ensure_ascii=False),
-                json.dumps(summary_kz, ensure_ascii=False),
-                meeting_id,
-            ))
-            conn.commit()
+    generation_jobs.check(meeting_id)
+    # Step 3: Russian Summary
+    logger.info("Generating Russian summary...")
+    summary_ru = await summary.generate(transcript_text=transcript_text)
 
-        # Generate template values if meeting is attached to a template
-        tpl_id = row["template_id"] if "template_id" in row.keys() else ""
-        if tpl_id:
-            try:
-                with get_db() as conn:
-                    tpl_row = conn.execute("SELECT * FROM protocol_templates WHERE id = ?", (tpl_id,)).fetchone()
-                if tpl_row and os.path.exists(tpl_row["docx_path"]):
-                    with open(tpl_row["docx_path"], "rb") as f:
-                        tpl_bytes = f.read()
-                    parsed_tpl = docx_template.parse_docx_template(tpl_bytes)
-                    slots_data = json.loads(tpl_row["slots"] or "[]")
-                    stored_slots_map = {s["key"]: s for s in slots_data}
-                    loop_iters = docx_template._loop_iterables(tpl_bytes)
-                    for s in parsed_tpl.slots:
-                        st = stored_slots_map.get(s.key)
-                        if st:
-                            s.label = st.get("label", s.label)
-                            s.value_type = st.get("value_type", s.value_type)
-                            s.repeat = st.get("repeat", s.repeat)
-                            s.omit_when_empty = st.get("omit_when_empty", s.omit_when_empty)
-                        elif s.key in loop_iters:
-                            s.value_type = "list[object]"
 
-                    logger.info("Generating custom template values for meeting %s with template %s", meeting_id, tpl_id)
-                    protocol_source = template_protocol.build_protocol_source(
-                        protocol_ru, agenda=agenda, participants=participants,
-                    )
-                    transfer_res = await template_generation.generate_protocol_template_values(
-                        parsed_tpl,
-                        tpl_row["additional_prompt"] or "",
-                        transcript_text,
-                        protocol_source=protocol_source,
-                        output_language="Russian",
-                        detail_level=tpl_row["detail_level"] or "concise",
-                    )
-                    tpl_values_ru = transfer_res.get("template_values") or {}
+    generation_jobs.check(meeting_id)
+    # Step 4: Kazakh Summary Translation
+    logger.info("Translating summary to Kazakh...")
+    summary_kz = await summary.translate(summary_ru=summary_ru)
 
-                    try:
-                        tpl_values_kz = await template_generation.translate_template_values(
-                            parsed_tpl, tpl_values_ru, "Kazakh",
-                        )
-                    except Exception as kz_err:
-                        logger.warning("Template values KZ translation error: %s", kz_err)
-                        tpl_values_kz = tpl_values_ru
 
-                    with get_db() as conn:
-                        conn.execute("""
-                            UPDATE meetings
-                            SET template_values_ru = ?, template_values_kz = ?
-                            WHERE id = ?
-                        """, (
-                            json.dumps(tpl_values_ru, ensure_ascii=False),
-                            json.dumps(tpl_values_kz, ensure_ascii=False),
-                            meeting_id,
-                        ))
-                        conn.commit()
-            except Exception as tpl_err:
-                logger.warning("Custom template generation non-fatal error: %s", tpl_err)
-
-        logger.info("Meeting generation completed successfully for %s", meeting_id)
-
-        # Auto-index into local vector store for RAG
+    tpl_values_ru, tpl_values_kz = {}, {}
+    # Generate template values if meeting is attached to a template
+    tpl_id = row["template_id"] if "template_id" in row.keys() else ""
+    if tpl_id:
         try:
+            generation_jobs.check(meeting_id)
             with get_db() as conn:
-                await indexer.index_meeting(meeting_id, conn)
-            logger.info("Auto-indexed meeting %s into vector store", meeting_id)
-        except Exception as idx_err:
-            logger.warning("Failed to auto-index meeting %s: %s", meeting_id, idx_err)
+                tpl_row = conn.execute("SELECT * FROM protocol_templates WHERE id = ?", (tpl_id,)).fetchone()
+            if tpl_row and os.path.exists(tpl_row["docx_path"]):
+                with open(tpl_row["docx_path"], "rb") as f:
+                    tpl_bytes = f.read()
+                parsed_tpl = docx_template.parse_docx_template(tpl_bytes)
+                slots_data = json.loads(tpl_row["slots"] or "[]")
+                stored_slots_map = {s["key"]: s for s in slots_data}
+                loop_iters = docx_template._loop_iterables(tpl_bytes)
+                for s in parsed_tpl.slots:
+                    st = stored_slots_map.get(s.key)
+                    if st:
+                        s.label = st.get("label", s.label)
+                        s.value_type = st.get("value_type", s.value_type)
+                        s.repeat = st.get("repeat", s.repeat)
+                        s.omit_when_empty = st.get("omit_when_empty", s.omit_when_empty)
+                    elif s.key in loop_iters:
+                        s.value_type = "list[object]"
 
-    except Exception as e:
-        logger.exception("Generation failed for meeting %s: %s", meeting_id, e)
+                logger.info("Generating custom template values for meeting %s with template %s", meeting_id, tpl_id)
+                protocol_source = template_protocol.build_protocol_source(
+                    protocol_ru, agenda=agenda, participants=participants,
+                )
+                transfer_res = await template_generation.generate_protocol_template_values(
+                    parsed_tpl,
+                    tpl_row["additional_prompt"] or "",
+                    transcript_text,
+                    protocol_source=protocol_source,
+                    output_language="Russian",
+                    detail_level=tpl_row["detail_level"] or "concise",
+                )
+                tpl_values_ru = transfer_res.get("template_values") or {}
+
+                try:
+                    tpl_values_kz = await template_generation.translate_template_values(
+                        parsed_tpl, tpl_values_ru, "Kazakh",
+                    )
+                except Exception as kz_err:
+                    logger.warning("Template values KZ translation error: %s", kz_err)
+                    raise
+
+        except Exception as tpl_err:
+            logger.warning("Custom template generation failed: %s", tpl_err)
+            raise
+
+    save_generation_results(meeting_id, {
+        "protocol_ru": protocol_ru, "protocol_kz": protocol_kz,
+        "summary_ru": summary_ru, "summary_kz": summary_kz,
+        "template_values_ru": tpl_values_ru, "template_values_kz": tpl_values_kz,
+    })
+    logger.info("Meeting generation completed successfully for %s", meeting_id)
+
+    # Auto-index into local vector store for RAG
+    try:
+        generation_jobs.check(meeting_id)
         with get_db() as conn:
-            conn.execute("""
-                UPDATE meetings SET status = 'error', error_message = ? WHERE id = ?
-            """, (f"Generation error: {e}", meeting_id))
-            conn.commit()
+            await indexer.index_meeting(meeting_id, conn, check_current=lambda: generation_jobs.check(meeting_id))
+        logger.info("Auto-indexed meeting %s into vector store", meeting_id)
+    except Exception as idx_err:
+        logger.warning("Failed to auto-index meeting %s: %s", meeting_id, idx_err)
 
 @app.get("/api/v1/meetings")
 async def list_meetings(q: Optional[str] = None):

@@ -180,7 +180,7 @@ class RecordingStreams:
             if not session:
                 raise HTTPException(404, 'Потоковая запись не найдена.')
             meeting = db.execute('SELECT status, audio_path FROM meetings WHERE id=?', (meeting_id,)).fetchone()
-            if meeting['status'] in ('generating', 'completed'):
+            if meeting['status'] in ('generating', 'cancelling', 'cancelled', 'completed'):
                 raise HTTPException(409, 'Обработка встречи уже запущена.')
             if not meeting['audio_path'] or not os.path.isfile(meeting['audio_path']):
                 raise HTTPException(400, 'Сначала сохраните аудио прерванной записи.')

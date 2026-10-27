@@ -93,6 +93,12 @@ export const api = {
     return recordingResponse(res);
   },
 
+  async stopGeneration(meetingId: string): Promise<{ meeting_id: string; status: Meeting["status"] }> {
+    return recordingResponse(await backendFetch(`${API_BASE}/meetings/${meetingId}/stop-generation`, {
+      method: "POST", signal: AbortSignal.timeout(20000),
+    }));
+  },
+
   async processRecording(meetingId: string, transcript: StreamingTranscript): Promise<{ status: string }> {
     const res = await backendFetch(`${API_BASE}/meetings/${meetingId}/process-recording`, {
       method: "POST",

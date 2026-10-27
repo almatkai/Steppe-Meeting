@@ -176,7 +176,7 @@ export const CreateMeetingWizard: React.FC = () => {
         try {
           attempts++;
           const m = await api.getMeeting(meetingId!);
-          if (m.status === "transcribed" || (m.status as string) === "completed") {
+          if (m.status === "transcribed" || m.status === "completed" || m.status === "cancelled") {
             setTranscriptText(m.transcript_text || "");
             setIsTranscribing(false);
             setTranscribeStatus("");
