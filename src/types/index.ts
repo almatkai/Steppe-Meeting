@@ -98,6 +98,13 @@ export interface WhisperModelCatalogItem {
   downloaded: boolean;
   disk_size_mb: number;
   is_downloading: boolean;
+  engine: 'faster-whisper' | 'gigaam-mlx' | 'wav2vec2-ctc' | 'vosk';
+  languages: string[];
+  streaming: 'chunked' | 'native';
+  source_url: string;
+  env_installed: boolean;
+  supported: boolean;
+  compatibility_error?: string | null;
 }
 
 export interface WhisperLocalStatus {
@@ -106,6 +113,9 @@ export interface WhisperLocalStatus {
   env_install_progress: string;
   env_install_error?: string | null;
   selected_model: string;
+  installing_model?: string | null;
+  engine?: WhisperModelCatalogItem['engine'];
+  error?: string | null;
   model_ready: boolean;
   available_models: string[];
   catalog: WhisperModelCatalogItem[];

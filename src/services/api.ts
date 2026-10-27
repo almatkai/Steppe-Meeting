@@ -1,18 +1,63 @@
-import type { Meeting, Participant, SystemConfig, SystemStatus, ChatSession, ChatMessage, Citation, ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../types";
+import { invoke } from "@tauri-apps/api/core";
+import type { CaptionChunk, CaptionResult, StreamingTranscript } from "../utils/liveCaptions";
+import type { Meeting, Participant, SystemConfig, SystemStatus, WhisperStatus, ChatSession, ChatMessage, Citation, ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../types";
 
 const API_BASE = "http://127.0.0.1:8008/api/v1";
+
+// Each webview shares one startup attempt across its concurrent API requests.
+// A failed request invalidates it so the next user retry can restart the server.
+let backendReady: Promise<void> | undefined;
+async function backendFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const native = typeof window !== "undefined" && Boolean((window as any).__TAURI_INTERNALS__);
+  if (native) {
+    backendReady ??= invoke<void>("ensure_backend").catch((error) => {
+      backendReady = undefined;
+      throw new Error(String(error));
+    });
+    await backendReady;
+  }
+  const bounded = url.includes("/system/") || (url.includes("/templates") && (!options.method || options.method === "GET"));
+  try {
+    return await fetch(url, {
+      ...options,
+      ...(bounded && !options.signal ? { signal: AbortSignal.timeout(15000) } : {}),
+    });
+  } catch (error) {
+    backendReady = undefined;
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error("Локальный сервер не ответил вовремя. Повторите подключение.");
+    }
+    if (error instanceof TypeError) {
+      throw new Error("Локальный сервер недоступен (127.0.0.1:8008). Повторите подключение; для браузерного режима запустите ./backend/run_backend.sh.");
+    }
+    throw error;
+  }
+}
+
+async function recordingResponse(res: Response): Promise<any> {
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const detail = body?.detail;
+    if (typeof detail === "string") throw new Error(detail);
+    if (Array.isArray(detail)) {
+      throw new Error("Приложение отправило неполные или некорректные данные. Обновите приложение и повторите действие.");
+    }
+    throw new Error(`Ошибка сервера (${res.status})`);
+  }
+  return res.json();
+}
 
 export const api = {
   // Meetings
   async listMeetings(query?: string): Promise<Meeting[]> {
     const url = query ? `${API_BASE}/meetings?q=${encodeURIComponent(query)}` : `${API_BASE}/meetings`;
-    const res = await fetch(url);
+    const res = await backendFetch(url);
     if (!res.ok) throw new Error(`Failed to list meetings: ${res.statusText}`);
     return res.json();
   },
 
   async getMeeting(id: string): Promise<Meeting> {
-    const res = await fetch(`${API_BASE}/meetings/${id}`);
+    const res = await backendFetch(`${API_BASE}/meetings/${id}`);
     if (!res.ok) throw new Error(`Failed to get meeting: ${res.statusText}`);
     return res.json();
   },
@@ -25,10 +70,11 @@ export const api = {
     transcript_text?: string;
     template_id?: string;
   }): Promise<{ id: string; status: string; created_at: string }> {
-    const res = await fetch(`${API_BASE}/meetings/create`, {
+    const res = await backendFetch(`${API_BASE}/meetings/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
+      signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) throw new Error(`Failed to create meeting: ${res.statusText}`);
     return res.json();
@@ -37,16 +83,54 @@ export const api = {
   async uploadAudio(meetingId: string, file: File): Promise<any> {
     const form = new FormData();
     form.append("file", file);
-    const res = await fetch(`${API_BASE}/meetings/${meetingId}/upload-audio`, {
+    const res = await backendFetch(`${API_BASE}/meetings/${meetingId}/upload-audio`, {
       method: "POST",
       body: form,
+      signal: AbortSignal.timeout(60000),
     });
-    if (!res.ok) throw new Error(`Failed to upload audio: ${res.statusText}`);
-    return res.json();
+    return recordingResponse(res);
   },
 
-  async transcribe(meetingId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/meetings/${meetingId}/transcribe`, {
+  async processRecording(meetingId: string, transcript: StreamingTranscript): Promise<{ status: string }> {
+    const res = await backendFetch(`${API_BASE}/meetings/${meetingId}/process-recording`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(transcript),
+      signal: AbortSignal.timeout(30000),
+    });
+    return recordingResponse(res);
+  },
+
+  async startRecordingSession(meetingId: string): Promise<{ session_id: string; model: string; mode: string }> {
+    return recordingResponse(await backendFetch(`${API_BASE}/meetings/${meetingId}/recording-session`, {
+      method: "POST", signal: AbortSignal.timeout(30000),
+    }));
+  },
+
+  async cancelRecording(meetingId: string, sessionId: string): Promise<unknown> {
+    return recordingResponse(await backendFetch(`${API_BASE}/meetings/${meetingId}/cancel-recording`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }), signal: AbortSignal.timeout(30000),
+    }));
+  },
+
+  async transcribeCaption(audio: Blob, signal: AbortSignal, chunk: CaptionChunk, sessionId: string): Promise<CaptionResult> {
+    const form = new FormData();
+    form.append("file", audio, "caption.wav");
+    form.append("session_id", sessionId);
+    form.append("index", String(chunk.index));
+    form.append("offset_seconds", String(chunk.offset_seconds));
+    const res = await backendFetch(`${API_BASE}/captions/transcribe`, {
+      method: "POST", body: form,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]),
+    });
+    const result = await recordingResponse(res);
+    return result;
+  },
+
+  async transcribe(meetingId: string, autoGenerate: boolean = false): Promise<any> {
+    const query = autoGenerate ? "?auto_generate=true" : "";
+    const res = await backendFetch(`${API_BASE}/meetings/${meetingId}/transcribe${query}`, {
       method: "POST",
     });
     if (!res.ok) throw new Error(`Failed to start transcription: ${res.statusText}`);
@@ -54,7 +138,7 @@ export const api = {
   },
 
   async generate(meetingId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/meetings/${meetingId}/generate`, {
+    const res = await backendFetch(`${API_BASE}/meetings/${meetingId}/generate`, {
       method: "POST",
     });
     if (!res.ok) throw new Error(`Failed to start generation: ${res.statusText}`);
@@ -62,7 +146,7 @@ export const api = {
   },
 
   async updateMeeting(meetingId: string, data: Partial<Meeting> & { template_id?: string }): Promise<any> {
-    const res = await fetch(`${API_BASE}/meetings/${meetingId}`, {
+    const res = await backendFetch(`${API_BASE}/meetings/${meetingId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -72,7 +156,7 @@ export const api = {
   },
 
   async deleteMeeting(meetingId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/meetings/${meetingId}`, {
+    const res = await backendFetch(`${API_BASE}/meetings/${meetingId}`, {
       method: "DELETE",
     });
     if (!res.ok) throw new Error(`Failed to delete meeting: ${res.statusText}`);
@@ -88,7 +172,7 @@ export const api = {
     onError: (err: string) => void
   ) {
     try {
-      const res = await fetch(`${API_BASE}/chat`, {
+      const res = await backendFetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ meeting_id: meetingId, messages, context }),
@@ -145,7 +229,7 @@ export const api = {
   },
 
   async editText(selectedText: string, instruction: string, context?: any): Promise<string> {
-    const res = await fetch(`${API_BASE}/edit`, {
+    const res = await backendFetch(`${API_BASE}/edit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ selected_text: selectedText, instruction, context }),
@@ -157,25 +241,25 @@ export const api = {
 
   // Diagnostics & Config
   async getSystemStatus(): Promise<SystemStatus> {
-    const res = await fetch(`${API_BASE}/system/status`);
+    const res = await backendFetch(`${API_BASE}/system/status`);
     if (!res.ok) throw new Error(`Failed to get system status: ${res.statusText}`);
     return res.json();
   },
 
   async listModels(): Promise<string[]> {
-    const res = await fetch(`${API_BASE}/system/models`);
+    const res = await backendFetch(`${API_BASE}/system/models`);
     if (!res.ok) return ["qwen2.5:latest", "llama3.2:latest"];
     return res.json();
   },
 
   async getConfig(): Promise<SystemConfig> {
-    const res = await fetch(`${API_BASE}/system/config`);
+    const res = await backendFetch(`${API_BASE}/system/config`);
     if (!res.ok) throw new Error(`Failed to get config: ${res.statusText}`);
     return res.json();
   },
 
   async saveConfig(config: Partial<SystemConfig>): Promise<any> {
-    const res = await fetch(`${API_BASE}/system/config`, {
+    const res = await backendFetch(`${API_BASE}/system/config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
@@ -185,22 +269,27 @@ export const api = {
   },
 
   // Whisper STT Management
-  async getWhisperStatus(): Promise<any> {
-    const res = await fetch(`${API_BASE}/system/whisper/status`);
+  async getWhisperStatus(): Promise<WhisperStatus> {
+    const res = await backendFetch(`${API_BASE}/system/whisper/status`);
     if (!res.ok) throw new Error(`Failed to get Whisper status: ${res.statusText}`);
     return res.json();
   },
 
-  async installWhisperEnv(): Promise<{ status: string; message: string }> {
-    const res = await fetch(`${API_BASE}/system/whisper/install-env`, {
+  async installWhisperEnv(model: string): Promise<{ status: string; message: string }> {
+    const res = await backendFetch(`${API_BASE}/system/whisper/install-env`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
     });
-    if (!res.ok) throw new Error(`Failed to start Whisper env install: ${res.statusText}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Ошибка установки среды");
+    }
     return res.json();
   },
 
   async downloadWhisperModel(model: string): Promise<{ status: string; message: string }> {
-    const res = await fetch(`${API_BASE}/system/whisper/download-model`, {
+    const res = await backendFetch(`${API_BASE}/system/whisper/download-model`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model }),
@@ -213,7 +302,7 @@ export const api = {
   },
 
   async deleteWhisperModel(model: string): Promise<{ status: string; model: string }> {
-    const res = await fetch(`${API_BASE}/system/whisper/delete-model`, {
+    const res = await backendFetch(`${API_BASE}/system/whisper/delete-model`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model }),
@@ -238,7 +327,7 @@ export const api = {
     lang: "ru" | "kz" = "ru",
     options?: { openFolder?: boolean; openFile?: boolean; templateId?: string }
   ): Promise<{ success: boolean; filename: string; path: string }> {
-    const res = await fetch(`${API_BASE}/meetings/${meetingId}/export/docx/save`, {
+    const res = await backendFetch(`${API_BASE}/meetings/${meetingId}/export/docx/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -265,7 +354,7 @@ export const api = {
     lang: "ru" | "kz" = "ru",
     options?: { openFolder?: boolean; openFile?: boolean }
   ): Promise<{ success: boolean; filename: string; path: string }> {
-    const res = await fetch(`${API_BASE}/meetings/${meetingId}/export/pdf/save`, {
+    const res = await backendFetch(`${API_BASE}/meetings/${meetingId}/export/pdf/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -282,7 +371,7 @@ export const api = {
   },
 
   async openSystemFile(path: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/system/open-file`, {
+    const res = await backendFetch(`${API_BASE}/system/open-file`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path }),
@@ -295,7 +384,7 @@ export const api = {
   },
 
   async revealSystemFile(path: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/system/reveal-file`, {
+    const res = await backendFetch(`${API_BASE}/system/reveal-file`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path }),
@@ -308,7 +397,7 @@ export const api = {
   },
 
   async saveUrlToDownloads(url: string, filename: string, openFolder = true): Promise<{ success: boolean; filename: string; path: string }> {
-    const res = await fetch(`${API_BASE}/system/save-url-to-downloads`, {
+    const res = await backendFetch(`${API_BASE}/system/save-url-to-downloads`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, filename, open_folder: openFolder }),
@@ -322,13 +411,13 @@ export const api = {
 
   // Protocol Templates Management
   async listTemplates(): Promise<ProtocolTemplate[]> {
-    const res = await fetch(`${API_BASE}/templates`);
+    const res = await backendFetch(`${API_BASE}/templates`);
     if (!res.ok) throw new Error(`Failed to list templates: ${res.statusText}`);
     return res.json();
   },
 
   async getTemplate(id: string): Promise<ProtocolTemplate> {
-    const res = await fetch(`${API_BASE}/templates/${id}`);
+    const res = await backendFetch(`${API_BASE}/templates/${id}`);
     if (!res.ok) throw new Error(`Failed to get template: ${res.statusText}`);
     return res.json();
   },
@@ -336,7 +425,7 @@ export const api = {
   async previewTemplateSlots(file: File): Promise<{ slots: ProtocolTemplateSlot[]; render_ready: boolean; stats: any; warnings: string[] }> {
     const formData = new FormData();
     formData.append("file", file);
-    const res = await fetch(`${API_BASE}/templates/parse-preview`, {
+    const res = await backendFetch(`${API_BASE}/templates/parse-preview`, {
       method: "POST",
       body: formData,
     });
@@ -348,7 +437,7 @@ export const api = {
   },
 
   async uploadTemplate(formData: FormData): Promise<{ id: string; name: string; slots_count: number; render_ready: boolean; created_at: string }> {
-    const res = await fetch(`${API_BASE}/templates/upload`, {
+    const res = await backendFetch(`${API_BASE}/templates/upload`, {
       method: "POST",
       body: formData,
     });
@@ -360,7 +449,7 @@ export const api = {
   },
 
   async deleteTemplate(id: string): Promise<{ success: boolean; detached_meetings?: number }> {
-    const res = await fetch(`${API_BASE}/templates/${id}`, {
+    const res = await backendFetch(`${API_BASE}/templates/${id}`, {
       method: "DELETE",
     });
     if (!res.ok) {
@@ -371,7 +460,7 @@ export const api = {
   },
 
   async testTemplate(id: string, data?: { transcript?: string; detail_level?: string }): Promise<TemplateTestResult> {
-    const res = await fetch(`${API_BASE}/templates/${id}/test`, {
+    const res = await backendFetch(`${API_BASE}/templates/${id}/test`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data || {}),
@@ -401,13 +490,13 @@ export const api = {
 
   // Multi-Turn RAG Chat Sessions & Search
   async listChatSessions(): Promise<ChatSession[]> {
-    const res = await fetch(`${API_BASE}/chat/sessions`);
+    const res = await backendFetch(`${API_BASE}/chat/sessions`);
     if (!res.ok) throw new Error(`Failed to list chat sessions: ${res.statusText}`);
     return res.json();
   },
 
   async createChatSession(title?: string): Promise<ChatSession> {
-    const res = await fetch(`${API_BASE}/chat/sessions`, {
+    const res = await backendFetch(`${API_BASE}/chat/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: title || "Новый диалог" }),
@@ -417,13 +506,13 @@ export const api = {
   },
 
   async getSessionMessages(sessionId: string): Promise<ChatMessage[]> {
-    const res = await fetch(`${API_BASE}/chat/sessions/${sessionId}/messages`);
+    const res = await backendFetch(`${API_BASE}/chat/sessions/${sessionId}/messages`);
     if (!res.ok) throw new Error(`Failed to get session messages: ${res.statusText}`);
     return res.json();
   },
 
   async deleteChatSession(sessionId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/chat/sessions/${sessionId}`, {
+    const res = await backendFetch(`${API_BASE}/chat/sessions/${sessionId}`, {
       method: "DELETE",
     });
     if (!res.ok) throw new Error(`Failed to delete chat session: ${res.statusText}`);
@@ -443,7 +532,7 @@ export const api = {
     signal?: AbortSignal
   ): Promise<void> {
     try {
-      const res = await fetch(`${API_BASE}/chat/sessions/${sessionId}/messages`, {
+      const res = await backendFetch(`${API_BASE}/chat/sessions/${sessionId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, filter_meeting_id: filterMeetingId }),
@@ -512,13 +601,13 @@ export const api = {
   },
 
   async reindexAll(): Promise<{ status: string; meetings_processed: number; meetings_indexed: number; total_chunks: number }> {
-    const res = await fetch(`${API_BASE}/search/reindex`, { method: "POST" });
+    const res = await backendFetch(`${API_BASE}/search/reindex`, { method: "POST" });
     if (!res.ok) throw new Error(`Reindex error: ${res.statusText}`);
     return res.json();
   },
 
   async getSearchStats(): Promise<{ total_chunks: number; indexed_meetings: number }> {
-    const res = await fetch(`${API_BASE}/search/stats`);
+    const res = await backendFetch(`${API_BASE}/search/stats`);
     if (!res.ok) throw new Error(`Search stats error: ${res.statusText}`);
     return res.json();
   },

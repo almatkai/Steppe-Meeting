@@ -10,6 +10,18 @@ import json
 import io
 import logging
 import os
+import tempfile
+
+# Ensure temp directory exists and is writable (prevents SpooledTemporaryFile failure on >1MB uploads)
+current_tmp = os.environ.get("TMPDIR")
+if current_tmp and not os.path.isdir(current_tmp):
+    del os.environ["TMPDIR"]
+    tempfile.tempdir = None
+
+try:
+    os.makedirs(tempfile.gettempdir(), exist_ok=True)
+except Exception:
+    tempfile.tempdir = "/tmp"
 import re
 import sqlite3
 import subprocess
@@ -23,10 +35,10 @@ import urllib.parse
 
 import httpx
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Add current backend folder to python path
 BASE_DIR = Path(__file__).resolve().parent
@@ -46,6 +58,8 @@ DB_PATH = DATA_DIR / "meetings.db"
 
 # Import local engine modules
 from engine.config import settings
+from live_captions import create_router as create_captions_router
+from recording_streams import RecordingStreams
 from engine import chunking, docx_template, docx_preview, template_generation, template_profile, template_protocol, pdf_export, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
 
 # LLM telemetry is runtime data too, not a repo-relative directory.
@@ -367,6 +381,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code == 400 and exc.detail == "There was an error parsing the body":
+        cause = getattr(exc, "__cause__", None)
+        logger.error(
+            "Body parsing failed on %s %s: cause=%r",
+            request.method, request.url.path, cause, exc_info=cause or exc
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+recording_streams = RecordingStreams(get_db, lambda key, default=None: get_setting(key, default))
+app.include_router(create_captions_router(get_setting, recording_streams))
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -481,8 +509,55 @@ async def upload_audio(meeting_id: str, file: UploadFile = File(...)):
 
     return {"meeting_id": meeting_id, "filename": clean_filename, "size": len(content)}
 
+class RecordingCompletionRequest(BaseModel):
+    session_id: str
+    chunk_count: int = Field(ge=0)
+    duration_seconds: float = Field(ge=0, allow_inf_nan=False)
+
+
+@app.post("/api/v1/meetings/{meeting_id}/process-recording")
+async def process_recording(meeting_id: str, background_tasks: BackgroundTasks, request: Optional[RecordingCompletionRequest] = None):
+    """Finalize the saved streaming transcript, then generate without another STT pass."""
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM meetings WHERE id=?", (meeting_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Meeting not found")
+        if request is None:
+            # Installed clients may outlive a backend update. Never silently
+            # re-transcribe their audio; allow retry only when text already exists.
+            if row["status"] in ("generating", "completed") and (row["transcript_text"] or "").strip():
+                return {"meeting_id": meeting_id, "status": row["status"]}
+            raise HTTPException(409, "Эта запись начата в старой версии Mini. Аудио сохранено в истории. Обновите приложение; запись можно восстановить из сохранённого аудио.")
+        session = conn.execute("SELECT finalized FROM recording_streams WHERE id=? AND meeting_id=?",
+                               (request.session_id, meeting_id)).fetchone()
+        if not session:
+            raise HTTPException(409, "Транскрипт этой записи не найден.")
+        if session["finalized"] and row["status"] in ("generating", "completed"):
+            return {"meeting_id": meeting_id, "status": row["status"]}
+        audio_path = row["audio_path"]
+        if not audio_path or not os.path.isfile(audio_path) or os.path.getsize(audio_path) == 0:
+            raise HTTPException(400, "Аудиозапись не сохранена или пуста.")
+        recording_streams.prepare_completion(conn, meeting_id, request.session_id,
+                                             request.chunk_count, request.duration_seconds)
+        conn.commit()
+    background_tasks.add_task(run_recording_pipeline, meeting_id)
+    return {"meeting_id": meeting_id, "status": "generating"}
+
+
+async def run_recording_pipeline(meeting_id: str):
+    try:
+        sync_generation_settings()
+        await run_generation(meeting_id)
+    except Exception as error:
+        logger.exception("Recording generation failed for %s", meeting_id)
+        with get_db() as conn:
+            conn.execute("UPDATE meetings SET status='error', error_message=? WHERE id=?", (str(error), meeting_id))
+            conn.commit()
+
+
 @app.post("/api/v1/meetings/{meeting_id}/transcribe")
-async def transcribe_meeting(meeting_id: str, background_tasks: BackgroundTasks):
+async def transcribe_meeting(meeting_id: str, background_tasks: BackgroundTasks, auto_generate: bool = False):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
         if not row:
@@ -494,10 +569,13 @@ async def transcribe_meeting(meeting_id: str, background_tasks: BackgroundTasks)
         conn.execute("UPDATE meetings SET status = 'transcribing', error_message = '' WHERE id = ?", (meeting_id,))
         conn.commit()
 
-    background_tasks.add_task(run_transcription, meeting_id, audio_path)
+    if auto_generate:
+        background_tasks.add_task(run_transcription, meeting_id, audio_path, auto_generate=True)
+    else:
+        background_tasks.add_task(run_transcription, meeting_id, audio_path)
     return {"meeting_id": meeting_id, "status": "transcribing"}
 
-async def run_transcription(meeting_id: str, audio_path: str):
+async def run_transcription(meeting_id: str, audio_path: str, auto_generate: bool = False):
     logger.info("Starting transcription for meeting %s with audio %s", meeting_id, audio_path)
     whisper_mode = get_setting("whisper_mode", "local")
 
@@ -604,6 +682,14 @@ async def run_transcription(meeting_id: str, audio_path: str):
             conn.commit()
 
         logger.info("Transcription completed for meeting %s (%d segments, duration: %.1fs)", meeting_id, len(segments), total_duration)
+
+        if auto_generate:
+            logger.info("Auto-generating protocol for meeting %s after transcription", meeting_id)
+            with get_db() as conn:
+                conn.execute("UPDATE meetings SET status = 'generating', error_message = '' WHERE id = ?", (meeting_id,))
+                conn.commit()
+            sync_generation_settings()
+            await run_generation(meeting_id)
 
     except Exception as e:
         logger.exception("Transcription failed for meeting %s: %s", meeting_id, e)
@@ -861,6 +947,7 @@ async def delete_meeting(meeting_id: str):
                 os.remove(row["audio_path"])
             except Exception:
                 pass
+        recording_streams.discard_meeting(conn, meeting_id)
         conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
         conn.commit()
     return {"success": True}
@@ -2113,6 +2200,12 @@ async def system_save_url_to_downloads(req: SaveFileUrlRequest):
 # Diagnostics & System Endpoints
 # ---------------------------------------------------------------------------
 
+@app.get("/api/v1/system/health")
+async def backend_health():
+    # Readiness is independent of Ollama, STT dependencies and downloaded models.
+    return {"service": "steppe-meeting", "backend_dir": str(BASE_DIR), "pid": os.getpid()}
+
+
 @app.get("/api/v1/system/status")
 async def system_status():
     llm_url = get_setting("llm_base_url", "http://localhost:11434/v1").rstrip("/")
@@ -2178,14 +2271,11 @@ async def system_status():
     whisper_err = ""
 
     if whisper_mode == "local":
-        env_installed = whisper_service.is_env_installed()
-        models_avail = whisper_service.get_available_models()
-        model_ready = env_installed and (whisper_local_model in models_avail)
-        whisper_ok = model_ready
-        if not env_installed:
-            whisper_err = "Рабочая среда faster-whisper не установлена. Нажмите «Установить» в настройках."
-        elif not model_ready:
-            whisper_err = f"Модель '{whisper_local_model}' не скачана. Нажмите «Скачать» в настройках."
+        local_status = whisper_service.get_whisper_full_status(
+            whisper_mode, whisper_url, whisper_ext_model, whisper_key, whisper_local_model,
+        )
+        whisper_ok = local_status["ready"]
+        whisper_err = local_status["local"]["error"] or ""
     else:
         auth_hdrs = get_auth_headers(whisper_key)
         try:
@@ -2244,8 +2334,12 @@ async def get_whisper_status():
     )
 
 @app.post("/api/v1/system/whisper/install-env")
-async def install_whisper_env():
-    return whisper_service.start_install_env()
+async def install_whisper_env(req: Optional[WhisperModelActionRequest] = None):
+    try:
+        model = req.model if req else get_setting("whisper_local_model", "small")
+        return whisper_service.start_install_env(model)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/v1/system/whisper/download-model")
 async def download_whisper_model(req: WhisperModelActionRequest):
@@ -2256,7 +2350,10 @@ async def download_whisper_model(req: WhisperModelActionRequest):
 
 @app.post("/api/v1/system/whisper/delete-model")
 async def delete_whisper_model(req: WhisperModelActionRequest):
-    return whisper_service.delete_downloaded_model(req.model)
+    try:
+        return whisper_service.delete_downloaded_model(req.model)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/v1/system/models")
 async def list_models():
@@ -2331,6 +2428,11 @@ async def get_config():
 
 @app.post("/api/v1/system/config")
 async def save_config(req: SystemConfigRequest):
+    if req.whisper_local_model is not None:
+        try:
+            whisper_service.get_model_info(req.whisper_local_model.strip())
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     if req.llm_base_url is not None:
         set_setting("llm_base_url", req.llm_base_url.strip())
     if req.llm_model is not None:

@@ -1,13 +1,13 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
-  Send,
+  PaperPlaneTilt as Send,
   X,
-  Bot,
+  Robot as Bot,
   User,
-  Trash2,
-  CornerDownLeft,
-  Loader2,
-} from "lucide-react";
+  Trash as Trash2,
+  ArrowElbowDownLeft as CornerDownLeft,
+  CircleNotch as Loader2,
+} from "@phosphor-icons/react";
 import { SteppeIcon } from "../ui/SteppeIcon";
 import { MarkdownViewer } from "../ui/MarkdownViewer";
 import { api } from "../../services/api";
@@ -110,16 +110,16 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
   ];
 
   return (
-    <div className="fixed right-0 top-16 bottom-0 w-96 bg-slate-900/95 backdrop-blur-xl border-l border-slate-800 shadow-2xl z-40 flex flex-col select-none">
+    <div className="fixed right-0 top-16 bottom-0 w-96 bg-neutral-900/95 backdrop-blur-xl border-l border-neutral-800 shadow-2xl z-40 flex flex-col select-none">
       {/* Drawer Header */}
-      <div className="h-14 px-4 border-b border-slate-800 flex items-center justify-between">
+      <div className="h-14 px-4 border-b border-neutral-800 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+          <div className="w-7 h-7 rounded-lg bg-neutral-800/70 border border-neutral-700 flex items-center justify-center text-neutral-300">
             <SteppeIcon className="w-4 h-4" />
           </div>
           <div>
             <h3 className="text-xs font-semibold text-white">AI Ассистент</h3>
-            <p className="text-[10px] text-slate-400 font-mono">AI Copilot</p>
+            <p className="text-[10px] text-neutral-400 font-mono">AI Copilot</p>
           </div>
         </div>
 
@@ -133,14 +133,14 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
                 },
               ])
             }
-            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-neutral-800 transition-colors"
             title="Очистить историю"
           >
             <Trash2 className="w-4 h-4" />
           </button>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -155,23 +155,23 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
             className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}
           >
             {m.role === "assistant" && (
-              <div className="w-6 h-6 rounded-md bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0 mt-0.5">
+              <div className="w-6 h-6 rounded-md bg-neutral-800/70 border border-neutral-700 flex items-center justify-center text-neutral-300 shrink-0 mt-0.5">
                 <Bot className="w-3.5 h-3.5" />
               </div>
             )}
             {m.role === "user" ? (
-              <div className="p-3 rounded-2xl max-w-[82%] leading-relaxed whitespace-pre-wrap bg-indigo-600 text-white rounded-tr-sm shadow-md">
+              <div className="p-3 rounded-2xl max-w-[82%] leading-relaxed whitespace-pre-wrap bg-white text-neutral-950 rounded-tr-sm shadow-md">
                 {m.content}
               </div>
             ) : (
-              <div className="p-3 rounded-2xl max-w-[82%] leading-relaxed bg-slate-800/80 border border-slate-700/60 text-slate-200 rounded-tl-sm shadow-sm">
+              <div className="p-3 rounded-2xl max-w-[82%] leading-relaxed bg-neutral-800/80 border border-neutral-700/60 text-neutral-200 rounded-tl-sm shadow-sm">
                 {m.content ? (
                   <MarkdownViewer
                     content={m.content}
                     isStreaming={isStreaming && idx === messages.length - 1}
                   />
                 ) : isStreaming && idx === messages.length - 1 ? (
-                  <span className="inline-flex items-center gap-1 text-slate-400">
+                  <span className="inline-flex items-center gap-1 text-neutral-400">
                     <Loader2 className="w-3 h-3 animate-spin" />
                     Печатает...
                   </span>
@@ -179,7 +179,7 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
               </div>
             )}
             {m.role === "user" && (
-              <div className="w-6 h-6 rounded-md bg-slate-700 flex items-center justify-center text-slate-300 shrink-0 mt-0.5">
+              <div className="w-6 h-6 rounded-md bg-neutral-700 flex items-center justify-center text-neutral-300 shrink-0 mt-0.5">
                 <User className="w-3.5 h-3.5" />
               </div>
             )}
@@ -189,13 +189,13 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
       </div>
 
       {/* Quick suggestions */}
-      <div className="px-3 py-2 border-t border-slate-800/60 flex flex-wrap gap-1.5 bg-slate-950/30">
+      <div className="px-3 py-2 border-t border-neutral-800/60 flex flex-wrap gap-1.5 bg-neutral-950/30">
         {quickPrompts.map((p, idx) => (
           <button
             key={idx}
             type="button"
             onClick={() => handleSend(p)}
-            className="text-[11px] py-1 px-2.5 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/50 text-slate-300 transition-colors truncate max-w-full text-left"
+            className="text-[11px] py-1 px-2.5 rounded-lg bg-neutral-800/80 hover:bg-neutral-700/80 border border-neutral-700/50 text-neutral-300 transition-colors truncate max-w-full text-left"
           >
             {p}
           </button>
@@ -203,7 +203,7 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
       </div>
 
       {/* Input Form */}
-      <div className="p-3 border-t border-slate-800 bg-slate-950">
+      <div className="p-3 border-t border-neutral-800 bg-neutral-950">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -217,12 +217,12 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             disabled={isStreaming}
-            className="flex-1 py-2 px-3 text-xs rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+            className="flex-1 py-2 px-3 text-xs rounded-xl bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-400 focus:outline-none focus:border-neutral-500"
           />
           <button
             type="submit"
             disabled={!input.trim() || isStreaming}
-            className="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 transition-all shrink-0"
+            className="p-2 rounded-xl bg-white hover:bg-neutral-200 text-neutral-950 disabled:opacity-40 transition-all shrink-0"
           >
             <Send className="w-4 h-4" />
           </button>

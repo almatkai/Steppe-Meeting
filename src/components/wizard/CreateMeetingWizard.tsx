@@ -1,25 +1,25 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
-  UploadCloud,
-  Mic,
+  CloudArrowUp as UploadCloud,
+  Microphone as Mic,
   FileText,
   ArrowRight,
   ArrowLeft,
   Globe,
-  Loader2,
-  CheckCircle2,
+  CircleNotch as Loader2,
+  CheckCircle as CheckCircle2,
   Copy,
   Check,
-  RefreshCw,
-  AlertTriangle,
-  AlertCircle,
+  ArrowsClockwise as RefreshCw,
+  Warning as AlertTriangle,
+  WarningCircle as AlertCircle,
   FileAudio,
   FileVideo,
-  Trash2,
-  Sparkles,
-  LayoutTemplate,
-  Lock,
-} from "lucide-react";
+  Trash as Trash2,
+  Sparkle as Sparkles,
+  Layout as LayoutTemplate,
+  LockSimple as Lock,
+} from "@phosphor-icons/react";
 import { SteppeIcon } from "../ui/SteppeIcon";
 import { AudioDropZone } from "./AudioDropZone";
 import { AudioRecorder } from "./AudioRecorder";
@@ -164,7 +164,7 @@ export const CreateMeetingWizard: React.FC = () => {
       setTranscribeStatus("Загрузка аудиофайла на локальный сервер...");
       await api.uploadAudio(meetingId, fileToTranscribe);
 
-      setTranscribeStatus("Локальный Whisper выполняет распознавание речи...");
+      setTranscribeStatus("Локальная модель выполняет распознавание речи...");
       await api.transcribe(meetingId);
 
       // Poll status until transcribed or error
@@ -186,13 +186,13 @@ export const CreateMeetingWizard: React.FC = () => {
           if (m.status === "error") {
             setIsTranscribing(false);
             setTranscribeStatus("");
-            setTranscribeError(m.error_message || "Ошибка распознавания речи Whisper");
+            setTranscribeError(m.error_message || "Ошибка распознавания речи");
             return;
           }
           if (attempts >= maxAttempts) {
             setIsTranscribing(false);
             setTranscribeStatus("");
-            setTranscribeError("Превышено время ожидания ответа от Whisper сервера");
+            setTranscribeError("Превышено время ожидания распознавания речи");
             return;
           }
           pollTimerRef.current = setTimeout(poll, pollInterval);
@@ -284,11 +284,11 @@ export const CreateMeetingWizard: React.FC = () => {
           <div className="space-y-1">
             <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
               <span>Создать новое совещание</span>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-800 text-neutral-300 border border-neutral-700">
                 Офлайн протокол
               </span>
             </h2>
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-neutral-400">
               Пошаговый процесс: выберите источник аудио или текста, настройте параметры, проверьте транскрипт и сформируйте официальный протокол.
             </p>
           </div>
@@ -302,10 +302,10 @@ export const CreateMeetingWizard: React.FC = () => {
             onClick={() => setCurrentStep(1)}
             className={`p-3 rounded-xl border flex items-center gap-2.5 text-left transition-all cursor-pointer ${
               currentStep === 1
-                ? "bg-indigo-950/60 border-indigo-500 ring-2 ring-indigo-500/30 text-indigo-200 shadow-md shadow-indigo-500/10"
+                ? "bg-neutral-900 border-neutral-600 text-neutral-200"
                 : isStep1Complete
-                ? "bg-indigo-950/30 border-indigo-500/40 text-indigo-200 hover:border-indigo-400/60"
-                : "bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700"
+                ? "bg-neutral-900/50 border-neutral-800 text-neutral-300 hover:border-neutral-700"
+                : "bg-neutral-900/60 border-neutral-800 text-neutral-400 hover:border-neutral-700"
             }`}
           >
             <div
@@ -313,8 +313,8 @@ export const CreateMeetingWizard: React.FC = () => {
                 isStep1Complete
                   ? "bg-emerald-600/30 border border-emerald-500/60 text-emerald-300"
                   : currentStep === 1
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "bg-slate-800 border border-slate-700 text-slate-400"
+                  ? "bg-white text-neutral-950"
+                  : "bg-neutral-800 border border-neutral-700 text-neutral-400"
               }`}
             >
               {isStep1Complete ? <Check className="w-3.5 h-3.5" /> : "1"}
@@ -328,7 +328,7 @@ export const CreateMeetingWizard: React.FC = () => {
                   </span>
                 )}
               </div>
-              <p className="text-[11px] text-slate-400 truncate mt-0.5">
+              <p className="text-[11px] text-neutral-400 truncate mt-0.5">
                 {inputTab === "file" && (uploadedAudioFile ? uploadedAudioFile.name : "Файл не выбран")}
                 {inputTab === "record" && (recordedAudioFile ? "Запись готова" : "Запись звука / встречи")}
                 {inputTab === "text" && (manualText.trim() ? `${wordCount} слов` : "Вручную")}
@@ -343,26 +343,26 @@ export const CreateMeetingWizard: React.FC = () => {
             onClick={() => isStep1Complete && setCurrentStep(2)}
             className={`p-3 rounded-xl border flex items-center gap-2.5 text-left transition-all ${
               currentStep === 2
-                ? "bg-indigo-950/60 border-indigo-500 ring-2 ring-indigo-500/30 text-indigo-200 shadow-md shadow-indigo-500/10 cursor-pointer"
+                ? "bg-neutral-900 border-neutral-600 text-neutral-200 cursor-pointer"
                 : isStep1Complete
-                ? "bg-slate-900/70 border-slate-800 text-slate-300 hover:border-slate-700 cursor-pointer"
-                : "bg-slate-950/40 border-slate-800/40 opacity-50 cursor-not-allowed text-slate-500"
+                ? "bg-neutral-900/70 border-neutral-800 text-neutral-300 hover:border-neutral-700 cursor-pointer"
+                : "bg-neutral-950/40 border-neutral-800/40 opacity-50 cursor-not-allowed text-neutral-500"
             }`}
           >
             <div
               className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all ${
                 currentStep === 2
-                  ? "bg-indigo-600 text-white shadow-sm"
+                  ? "bg-white text-neutral-950"
                   : isStep1Complete && isStep2Complete
-                  ? "bg-indigo-600/30 border border-indigo-500/40 text-indigo-300"
-                  : "bg-slate-800 border border-slate-700 text-slate-400"
+                  ? "bg-neutral-800 border border-neutral-600 text-neutral-200"
+                  : "bg-neutral-800 border border-neutral-700 text-neutral-400"
               }`}
             >
-              {!isStep1Complete ? <Lock className="w-3.5 h-3.5 text-slate-500" /> : "2"}
+              {!isStep1Complete ? <Lock className="w-3.5 h-3.5 text-neutral-500" /> : "2"}
             </div>
             <div className="min-w-0">
               <p className="text-xs font-semibold truncate text-white">Параметры</p>
-              <p className="text-[11px] text-slate-400 truncate mt-0.5">
+              <p className="text-[11px] text-neutral-400 truncate mt-0.5">
                 {!isStep1Complete ? "Заблокирован" : title || "Название совещания"}
               </p>
             </div>
@@ -375,10 +375,10 @@ export const CreateMeetingWizard: React.FC = () => {
             onClick={() => isStep1Complete && setCurrentStep(3)}
             className={`p-3 rounded-xl border flex items-center gap-2.5 text-left transition-all ${
               currentStep === 3
-                ? "bg-indigo-950/60 border-indigo-500 ring-2 ring-indigo-500/30 text-indigo-200 shadow-md shadow-indigo-500/10 cursor-pointer"
+                ? "bg-neutral-900 border-neutral-600 text-neutral-200 cursor-pointer"
                 : isStep1Complete
-                ? "bg-slate-900/70 border-slate-800 text-slate-300 hover:border-slate-700 cursor-pointer"
-                : "bg-slate-950/40 border-slate-800/40 opacity-50 cursor-not-allowed text-slate-500"
+                ? "bg-neutral-900/70 border-neutral-800 text-neutral-300 hover:border-neutral-700 cursor-pointer"
+                : "bg-neutral-950/40 border-neutral-800/40 opacity-50 cursor-not-allowed text-neutral-500"
             }`}
           >
             <div
@@ -388,12 +388,12 @@ export const CreateMeetingWizard: React.FC = () => {
                   : isTranscribing
                   ? "bg-amber-600/30 border border-amber-500/40 text-amber-300"
                   : currentStep === 3
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "bg-slate-800 border border-slate-700 text-slate-400"
+                  ? "bg-white text-neutral-950"
+                  : "bg-neutral-800 border border-neutral-700 text-neutral-400"
               }`}
             >
               {!isStep1Complete ? (
-                <Lock className="w-3.5 h-3.5 text-slate-500" />
+                <Lock className="w-3.5 h-3.5 text-neutral-500" />
               ) : transcriptText.trim() ? (
                 <Check className="w-3.5 h-3.5" />
               ) : (
@@ -402,7 +402,7 @@ export const CreateMeetingWizard: React.FC = () => {
             </div>
             <div className="min-w-0">
               <p className="text-xs font-semibold truncate text-white">Транскрипт</p>
-              <p className="text-[11px] text-slate-400 truncate mt-0.5">
+              <p className="text-[11px] text-neutral-400 truncate mt-0.5">
                 {!isStep1Complete
                   ? "Заблокирован"
                   : isTranscribing
@@ -427,18 +427,18 @@ export const CreateMeetingWizard: React.FC = () => {
       {currentStep === 1 && (
         <div className="space-y-6">
           <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
                 Шаг 1. Источник данных совещания
               </span>
-              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+              <div className="flex items-center gap-1 bg-neutral-900 p-1 rounded-xl border border-neutral-800">
                 <button
                   type="button"
                   onClick={() => setInputTab("file")}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     inputTab === "file"
-                      ? "bg-indigo-600 text-white shadow-sm"
-                      : "text-slate-400 hover:text-white"
+                      ? "bg-neutral-700 text-white shadow-sm"
+                      : "text-neutral-400 hover:text-white"
                   }`}
                 >
                   <UploadCloud className="w-3.5 h-3.5" />
@@ -450,8 +450,8 @@ export const CreateMeetingWizard: React.FC = () => {
                   onClick={() => setInputTab("record")}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     inputTab === "record"
-                      ? "bg-indigo-600 text-white shadow-sm"
-                      : "text-slate-400 hover:text-white"
+                      ? "bg-neutral-700 text-white shadow-sm"
+                      : "text-neutral-400 hover:text-white"
                   }`}
                 >
                   <Mic className="w-3.5 h-3.5" />
@@ -463,8 +463,8 @@ export const CreateMeetingWizard: React.FC = () => {
                   onClick={() => setInputTab("text")}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     inputTab === "text"
-                      ? "bg-indigo-600 text-white shadow-sm"
-                      : "text-slate-400 hover:text-white"
+                      ? "bg-neutral-700 text-white shadow-sm"
+                      : "text-neutral-400 hover:text-white"
                   }`}
                 >
                   <FileText className="w-3.5 h-3.5" />
@@ -510,14 +510,14 @@ export const CreateMeetingWizard: React.FC = () => {
                     setManualText(e.target.value);
                     setTranscriptText(e.target.value);
                   }}
-                  className="w-full p-4 text-sm rounded-2xl bg-slate-900 border border-slate-700 text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500 transition-colors leading-relaxed font-sans"
+                  className="w-full p-4 text-sm rounded-2xl bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-400 focus:outline-none focus:border-neutral-500 transition-colors leading-relaxed font-sans"
                 />
-                <div className="flex items-center justify-between text-xs text-slate-400">
+                <div className="flex items-center justify-between text-xs text-neutral-400">
                   <span>
                     Текст будет использован для формирования официального протокола совещания.
                   </span>
                   {manualText.trim() && (
-                    <span className="text-indigo-300 font-medium">
+                    <span className="text-neutral-300 font-medium">
                       {manualText.trim().split(/\s+/).length} слов • {manualText.length} симв.
                     </span>
                   )}
@@ -527,7 +527,7 @@ export const CreateMeetingWizard: React.FC = () => {
           </div>
 
           {/* Step 1 Footer: Status & Next Button */}
-          <div className="pt-5 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="pt-5 border-t border-neutral-800 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="text-xs">
               {!isStep1Complete ? (
                 <div className="flex items-center gap-2 text-amber-300 bg-amber-500/10 border border-amber-500/20 px-3.5 py-2 rounded-xl">
@@ -560,8 +560,8 @@ export const CreateMeetingWizard: React.FC = () => {
               onClick={() => setCurrentStep(2)}
               className={`flex items-center justify-center gap-2 py-3 px-6 rounded-xl font-semibold text-xs transition-all ${
                 isStep1Complete
-                  ? "bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white shadow-lg shadow-indigo-600/25 active:scale-98 cursor-pointer"
-                  : "bg-slate-800/60 text-slate-500 border border-slate-800 cursor-not-allowed"
+                  ? "bg-white hover:bg-neutral-300 text-neutral-950 active:scale-98 cursor-pointer"
+                  : "bg-neutral-800/60 text-neutral-500 border border-neutral-800 cursor-not-allowed"
               }`}
             >
               <span>Перейти к параметрам (Шаг 2)</span>
@@ -574,12 +574,12 @@ export const CreateMeetingWizard: React.FC = () => {
       {/* STEP 2: Параметры протокола (доступен только после прохождения Шага 1) */}
       {currentStep === 2 && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+          <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+            <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
               Шаг 2. Параметры протокола
             </span>
             <div className="flex items-center gap-2">
-              <span className="px-2.5 py-1 rounded-lg text-xs bg-indigo-950/40 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5">
+              <span className="px-2.5 py-1 rounded-lg text-xs bg-neutral-900 text-neutral-300 border border-neutral-800 flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
                 <span>
                   Источник:{" "}
@@ -595,7 +595,7 @@ export const CreateMeetingWizard: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="md:col-span-2 space-y-1.5">
-              <label className="text-xs font-medium text-slate-300">
+              <label className="text-xs font-medium text-neutral-300">
                 Тема / Название совещания
               </label>
               <input
@@ -603,19 +603,19 @@ export const CreateMeetingWizard: React.FC = () => {
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Например: Еженедельная летучка команды разработки"
-                className="w-full py-2.5 px-3.5 text-sm rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500 transition-colors font-medium"
+                className="w-full py-2.5 px-3.5 text-sm rounded-xl bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-400 focus:outline-none focus:border-neutral-500 transition-colors font-medium"
               />
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                <Globe className="w-3.5 h-3.5 text-indigo-400" />
+              <label className="text-xs font-medium text-neutral-300 flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5 text-neutral-400" />
                 <span>Язык совещания</span>
               </label>
               <select
                 value={sourceLanguage}
                 onChange={(e) => setSourceLanguage(e.target.value)}
-                className="w-full py-2.5 px-3 text-sm rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-indigo-500 transition-colors font-medium"
+                className="w-full py-2.5 px-3 text-sm rounded-xl bg-neutral-900 border border-neutral-700 text-white focus:outline-none focus:border-neutral-500 transition-colors font-medium"
               >
                 <option value="multi">Смешанный (KZ / RU)</option>
                 <option value="ru">Русский</option>
@@ -629,8 +629,8 @@ export const CreateMeetingWizard: React.FC = () => {
 
           {/* Protocol template selector */}
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-              <LayoutTemplate className="w-3.5 h-3.5 text-violet-400" />
+            <label className="text-xs font-medium text-neutral-300 flex items-center gap-1.5">
+              <LayoutTemplate className="w-3.5 h-3.5 text-neutral-400" />
               <span>Шаблон протокола</span>
               {templatesError ? (
                 <button
@@ -642,7 +642,7 @@ export const CreateMeetingWizard: React.FC = () => {
                 </button>
               ) : (
                 templates.length === 0 && (
-                  <span className="text-[11px] text-slate-500 font-normal">
+                  <span className="text-[11px] text-neutral-500 font-normal">
                     — кастомных нет, загрузите в Настройки AI → Шаблоны
                   </span>
                 )
@@ -651,7 +651,7 @@ export const CreateMeetingWizard: React.FC = () => {
             <select
               value={selectedTemplateId}
               onChange={(e) => setSelectedTemplateId(e.target.value)}
-              className="w-full py-2.5 px-3 text-sm rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-indigo-500 transition-colors font-medium"
+              className="w-full py-2.5 px-3 text-sm rounded-xl bg-neutral-900 border border-neutral-700 text-white focus:outline-none focus:border-neutral-500 transition-colors font-medium"
             >
               <option value="">Стандартный протокол (по умолчанию)</option>
               {templates.map((t) => (
@@ -661,7 +661,7 @@ export const CreateMeetingWizard: React.FC = () => {
               ))}
             </select>
             {selectedTemplateId && (
-              <p className="text-[11px] text-violet-300/80">
+              <p className="text-[11px] text-neutral-400">
                 Значения полей шаблона сгенерирует LLM, экспорт DOCX — по вашему .docx.
               </p>
             )}
@@ -673,11 +673,11 @@ export const CreateMeetingWizard: React.FC = () => {
           />
 
           {/* Step 2 Footer Navigation */}
-          <div className="pt-5 border-t border-slate-800 flex items-center justify-between gap-4">
+          <div className="pt-5 border-t border-neutral-800 flex items-center justify-between gap-4">
             <button
               type="button"
               onClick={() => setCurrentStep(1)}
-              className="flex items-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all border border-slate-700"
+              className="flex items-center gap-2 py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold transition-all border border-neutral-700"
             >
               <ArrowLeft className="w-4 h-4" />
               <span>Назад к источнику данных</span>
@@ -687,7 +687,7 @@ export const CreateMeetingWizard: React.FC = () => {
               type="button"
               disabled={!isStep2Complete}
               onClick={() => setCurrentStep(3)}
-              className="flex items-center gap-2 py-3 px-6 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-semibold text-xs transition-all shadow-lg shadow-indigo-500/25 active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 py-3 px-6 rounded-xl bg-white hover:bg-neutral-300 text-neutral-950 font-semibold text-xs transition-all active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span>Перейти к транскрипту (Шаг 3)</span>
               <ArrowRight className="w-4 h-4" />
@@ -699,15 +699,15 @@ export const CreateMeetingWizard: React.FC = () => {
       {/* STEP 3: Транскрипт (Стенограмма) */}
       {currentStep === 3 && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
             <div className="flex items-center gap-2.5">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
                 Шаг 3. Транскрипт (Стенограмма)
               </span>
               {isTranscribing ? (
                 <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-medium">
                   <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>Распознавание Whisper...</span>
+                  <span>Распознавание речи...</span>
                 </span>
               ) : transcriptText.trim() ? (
                 <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-medium">
@@ -717,7 +717,7 @@ export const CreateMeetingWizard: React.FC = () => {
                   </span>
                 </span>
               ) : (
-                <span className="px-2.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400 text-xs font-medium">
+                <span className="px-2.5 py-0.5 rounded-full bg-neutral-800 border border-neutral-700 text-neutral-400 text-xs font-medium">
                   {inputTab === "text" ? "Ожидает ввода" : "Ожидает распознавания"}
                 </span>
               )}
@@ -729,7 +729,7 @@ export const CreateMeetingWizard: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleCopyTranscript}
-                  className="flex items-center gap-1.5 py-1 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
+                  className="flex items-center gap-1.5 py-1 px-2.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium transition-colors"
                 >
                   {copied ? (
                     <Check className="w-3 h-3 text-emerald-400" />
@@ -744,7 +744,7 @@ export const CreateMeetingWizard: React.FC = () => {
                     type="button"
                     onClick={handleTranscribeAudio}
                     disabled={isTranscribing}
-                    className="flex items-center gap-1.5 py-1 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors disabled:opacity-50"
+                    className="flex items-center gap-1.5 py-1 px-2.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium transition-colors disabled:opacity-50"
                     title="Запустить распознавание повторно"
                   >
                     <RefreshCw className="w-3 h-3" />
@@ -758,7 +758,7 @@ export const CreateMeetingWizard: React.FC = () => {
                     setTranscriptText("");
                     if (inputTab === "text") setManualText("");
                   }}
-                  className="flex items-center gap-1 py-1 px-2 rounded-lg bg-slate-800/60 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 text-xs transition-colors"
+                  className="flex items-center gap-1 py-1 px-2 rounded-lg bg-neutral-800/60 hover:bg-rose-500/20 text-neutral-400 hover:text-rose-300 text-xs transition-colors"
                   title="Очистить транскрипт"
                 >
                   <Trash2 className="w-3 h-3" />
@@ -772,11 +772,11 @@ export const CreateMeetingWizard: React.FC = () => {
             <div className="space-y-4">
               {/* If no transcript yet and not transcribing */}
               {!transcriptText.trim() && !isTranscribing && (
-                <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
+                <div className="p-6 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-4">
                   {activeAudioFile ? (
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+                        <div className="w-10 h-10 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center text-neutral-300 shrink-0">
                           {activeAudioFile.type.startsWith("video/") ? (
                             <FileVideo className="w-5 h-5" />
                           ) : (
@@ -787,10 +787,10 @@ export const CreateMeetingWizard: React.FC = () => {
                           <p className="font-semibold text-sm text-white truncate max-w-sm sm:max-w-md">
                             {activeAudioFile.name}
                           </p>
-                          <p className="text-xs text-slate-400 mt-0.5">
+                          <p className="text-xs text-neutral-400 mt-0.5">
                             {formatFileSize(activeAudioFile.size)} •{" "}
                             {systemStatus?.whisper?.mode === "local"
-                              ? `Локальный Whisper (${systemStatus?.whisper?.model || "small"})`
+                              ? `Локальная модель (${systemStatus?.whisper?.model || "small"})`
                               : `Внешний Whisper (${systemStatus?.whisper?.model || "custom"})`}
                           </p>
                         </div>
@@ -799,14 +799,14 @@ export const CreateMeetingWizard: React.FC = () => {
                       <button
                         type="button"
                         onClick={handleTranscribeAudio}
-                        className="flex items-center justify-center gap-2 py-2.5 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-md shadow-indigo-600/20 active:scale-95 shrink-0 cursor-pointer"
+                        className="flex items-center justify-center gap-2 py-2.5 px-5 rounded-xl bg-white hover:bg-neutral-300 text-neutral-950 font-semibold text-xs transition-all active:scale-95 shrink-0 cursor-pointer"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
-                        <span>Распознать аудио (Whisper)</span>
+                        <span>Распознать аудио</span>
                       </button>
                     </div>
                   ) : (
-                    <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 text-center text-xs text-slate-400">
+                    <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 text-center text-xs text-neutral-400">
                       Сначала выберите файл или надиктуйте запись на Шаге 1.
                     </div>
                   )}
@@ -817,7 +817,7 @@ export const CreateMeetingWizard: React.FC = () => {
                         <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
                         <span>
                           {systemStatus?.whisper?.error ||
-                            "Whisper STT не настроен. Установите локальную модель или укажите API-ключ в настройках."}
+                            "Распознавание речи не настроено. Установите локальную модель или укажите API-ключ в настройках."}
                         </span>
                       </div>
                       <button
@@ -850,16 +850,16 @@ export const CreateMeetingWizard: React.FC = () => {
 
               {/* Transcribing in progress */}
               {isTranscribing && (
-                <div className="p-8 rounded-2xl bg-slate-900/90 border border-indigo-500/30 text-center space-y-4 shadow-xl shadow-indigo-500/5">
-                  <div className="w-12 h-12 mx-auto rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 animate-spin">
+                <div className="p-8 rounded-2xl bg-neutral-900/90 border border-neutral-800 text-center space-y-4">
+                  <div className="w-12 h-12 mx-auto rounded-2xl bg-neutral-800 border border-neutral-700 flex items-center justify-center text-neutral-300 animate-spin">
                     <Loader2 className="w-6 h-6" />
                   </div>
                   <div className="space-y-1">
                     <h4 className="text-sm font-semibold text-white">
                       {transcribeStatus || "Идет локальное распознавание речи..."}
                     </h4>
-                    <p className="text-xs text-slate-400 max-w-md mx-auto">
-                      Локальная модель Whisper переводит речь в текст. После завершения распознавания текст появится ниже для проверки.
+                    <p className="text-xs text-neutral-400 max-w-md mx-auto">
+                      Выбранная модель распознаёт речь в текст. После завершения распознавания текст появится ниже для проверки.
                     </p>
                   </div>
                 </div>
@@ -868,7 +868,7 @@ export const CreateMeetingWizard: React.FC = () => {
               {/* Transcript ready (editable) */}
               {transcriptText.trim() && !isTranscribing && (
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-slate-400">
+                  <div className="flex items-center justify-between text-xs text-neutral-400">
                     <span>
                       Вы можете отредактировать текст перед отправкой в языковую модель (исправить имена, должности или термины):
                     </span>
@@ -879,7 +879,7 @@ export const CreateMeetingWizard: React.FC = () => {
                     value={transcriptText}
                     onChange={(e) => setTranscriptText(e.target.value)}
                     placeholder="Текст расшифровки совещания..."
-                    className="w-full p-4 text-sm rounded-2xl bg-slate-900 border border-slate-700 text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500 transition-colors leading-relaxed font-sans font-normal"
+                    className="w-full p-4 text-sm rounded-2xl bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-400 focus:outline-none focus:border-neutral-500 transition-colors leading-relaxed font-sans font-normal"
                   />
                 </div>
               )}
@@ -895,21 +895,21 @@ export const CreateMeetingWizard: React.FC = () => {
                   setManualText(e.target.value);
                 }}
                 placeholder="Вставьте расшифровку аудио, стенограмму или заметки с совещания..."
-                className="w-full p-4 text-sm rounded-2xl bg-slate-900 border border-slate-700 text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500 transition-colors leading-relaxed font-sans"
+                className="w-full p-4 text-sm rounded-2xl bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-400 focus:outline-none focus:border-neutral-500 transition-colors leading-relaxed font-sans"
               />
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-neutral-400">
                 Текст готов к отправке в языковую модель для формирования официального протокола.
               </p>
             </div>
           )}
 
           {/* Step 3 Footer Navigation */}
-          <div className="pt-5 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="pt-5 border-t border-neutral-800 flex flex-col sm:flex-row items-center justify-between gap-4">
             <button
               type="button"
               disabled={isSubmitting || isTranscribing}
               onClick={() => setCurrentStep(2)}
-              className="flex items-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all border border-slate-700 disabled:opacity-50"
+              className="flex items-center gap-2 py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold transition-all border border-neutral-700 disabled:opacity-50"
             >
               <ArrowLeft className="w-4 h-4" />
               <span>Назад к параметрам</span>
@@ -921,7 +921,7 @@ export const CreateMeetingWizard: React.FC = () => {
                   type="button"
                   disabled={isSubmitting || isTranscribing}
                   onClick={() => handleFinalSubmit(true)}
-                  className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all border border-slate-700 disabled:opacity-50 cursor-pointer"
+                  className="py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold transition-all border border-neutral-700 disabled:opacity-50 cursor-pointer"
                 >
                   Сохранить только транскрипт
                 </button>
@@ -941,7 +941,7 @@ export const CreateMeetingWizard: React.FC = () => {
                     handleFinalSubmit(false);
                   }
                 }}
-                className="flex items-center justify-center gap-2.5 py-3 px-7 rounded-xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-indigo-600 hover:from-indigo-500 hover:to-indigo-500 text-white font-semibold text-sm transition-all shadow-xl shadow-indigo-500/25 active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                className="flex items-center justify-center gap-2.5 py-3 px-7 rounded-xl bg-white hover:bg-neutral-300 text-neutral-950 font-semibold text-sm transition-all active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 {isSubmitting ? (
                   <>
@@ -956,7 +956,7 @@ export const CreateMeetingWizard: React.FC = () => {
                 ) : !transcriptText.trim() && activeAudioFile ? (
                   <>
                     <Sparkles className="w-4 h-4" />
-                    <span>1. Распознать аудио (Whisper)</span>
+                    <span>1. Распознать аудио</span>
                     <ArrowRight className="w-4 h-4 ml-0.5" />
                   </>
                 ) : (

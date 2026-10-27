@@ -1,19 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   FileText,
-  UploadCloud,
-  Download,
-  Trash2,
-  FlaskConical,
-  CheckCircle2,
-  AlertTriangle,
-  Loader2,
-  ChevronDown,
+  CloudArrowUp as UploadCloud,
+  DownloadSimple as Download,
+  Trash as Trash2,
+  Flask as FlaskConical,
+  CheckCircle as CheckCircle2,
+  Warning as AlertTriangle,
+  CircleNotch as Loader2,
+  CaretDown as ChevronDown,
   ShieldCheck,
-  FileUp,
+  FileArrowUp as FileUp,
   Play,
   X,
-} from "lucide-react";
+} from "@phosphor-icons/react";
 import { api } from "../../services/api";
 import type { ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../../types";
 import { downloadFileFromUrl } from "../../utils/fileDownload";
@@ -220,16 +220,16 @@ export const TemplateManager: React.FC = () => {
     setExpanded((p) => ({ ...p, [id]: !p[id] }));
 
   return (
-    <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-5">
+    <div className="p-6 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-violet-600/15 border border-violet-500/20 flex items-center justify-center text-violet-400">
+          <div className="w-9 h-9 rounded-xl bg-neutral-800/70 border border-neutral-700 flex items-center justify-center text-neutral-300">
             <FileText className="w-5 h-5" />
           </div>
           <div>
             <h3 className="text-sm font-semibold text-white">Шаблоны протоколов</h3>
-            <p className="text-[11px] text-slate-400">
+            <p className="text-[11px] text-neutral-400">
               Кастомные .docx шаблоны для экспорта официальных протоколов
             </p>
           </div>
@@ -239,7 +239,7 @@ export const TemplateManager: React.FC = () => {
           <button
             type="button"
             onClick={() => downloadFileFromUrl(api.getSampleTemplateDownloadUrl(), "Образец_шаблона.docx")}
-            className="flex items-center gap-1.5 py-1.5 px-3 rounded-lg bg-slate-950/70 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-600 text-[11px] font-medium transition-all"
+            className="flex items-center gap-1.5 py-1.5 px-3 rounded-lg bg-neutral-950/70 border border-neutral-800 text-neutral-300 hover:text-white hover:border-neutral-600 text-[11px] font-medium transition-all"
           >
             <Download className="w-3.5 h-3.5" />
             <span>Образец .docx</span>
@@ -247,7 +247,7 @@ export const TemplateManager: React.FC = () => {
           <button
             type="button"
             onClick={() => setShowUpload((v) => !v)}
-            className="flex items-center gap-1.5 py-1.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold transition-all shadow-sm shadow-indigo-600/30"
+            className="flex items-center gap-1.5 py-1.5 px-3 rounded-lg bg-white hover:bg-neutral-200 text-neutral-950 text-[11px] font-semibold transition-all shadow-sm "
           >
             <FileUp className="w-3.5 h-3.5" />
             <span>{showUpload ? "Скрыть загрузку" : "Загрузить шаблон"}</span>
@@ -257,21 +257,21 @@ export const TemplateManager: React.FC = () => {
 
       {/* Upload panel */}
       {showUpload && (
-        <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-4">
+        <div className="p-4 rounded-xl bg-neutral-950/60 border border-neutral-800 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-300">Файл шаблона (.docx)</label>
+              <label className="text-xs font-medium text-neutral-300">Файл шаблона (.docx)</label>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full flex items-center gap-3 p-3 rounded-xl bg-slate-900 border border-dashed border-slate-700 hover:border-indigo-500 cursor-pointer transition-colors text-left"
+                className="w-full flex items-center gap-3 p-3 rounded-xl bg-neutral-900 border border-dashed border-neutral-700 hover:border-neutral-600 cursor-pointer transition-colors text-left"
               >
-                <UploadCloud className="w-5 h-5 text-indigo-400 shrink-0" />
+                <UploadCloud className="w-5 h-5 text-neutral-300 shrink-0" />
                 <span className="min-w-0 block">
                   <span className="text-xs font-medium text-white truncate block">
                     {file ? file.name : "Нажмите, чтобы выбрать файл"}
                   </span>
-                  <span className="text-[11px] text-slate-400 block">
+                  <span className="text-[11px] text-neutral-400 block">
                     Поля: {"{{ field }}"}, линии ___, инструкции [в скобках]
                   </span>
                 </span>
@@ -287,21 +287,21 @@ export const TemplateManager: React.FC = () => {
 
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-slate-300">Название шаблона</label>
+                <label className="text-xs font-medium text-neutral-300">Название шаблона</label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Например: Протокол совещания акимата"
-                  className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-indigo-500 placeholder-slate-600"
+                  className="w-full py-2 px-3 rounded-xl bg-neutral-900 border border-neutral-700 text-white text-xs focus:outline-none focus:border-neutral-500 placeholder-neutral-600"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-slate-300">Детализация</label>
+                <label className="text-xs font-medium text-neutral-300">Детализация</label>
                 <select
                   value={detailLevel}
                   onChange={(e) => setDetailLevel(e.target.value as typeof detailLevel)}
-                  className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-indigo-500"
+                  className="w-full py-2 px-3 rounded-xl bg-neutral-900 border border-neutral-700 text-white text-xs focus:outline-none focus:border-neutral-500"
                 >
                   {DETAIL_LEVELS.map((d) => (
                     <option key={d.value} value={d.value}>{d.label}</option>
@@ -313,27 +313,27 @@ export const TemplateManager: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-300">
-                Описание <span className="text-slate-500 font-normal">(необязательно)</span>
+              <label className="text-xs font-medium text-neutral-300">
+                Описание <span className="text-neutral-500 font-normal">(необязательно)</span>
               </label>
               <input
                 type="text"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Для каких совещаний подходит"
-                className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-indigo-500 placeholder-slate-600"
+                className="w-full py-2 px-3 rounded-xl bg-neutral-900 border border-neutral-700 text-white text-xs focus:outline-none focus:border-neutral-500 placeholder-neutral-600"
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-300">
-                Доп. инструкция для LLM <span className="text-slate-500 font-normal">(необязательно)</span>
+              <label className="text-xs font-medium text-neutral-300">
+                Доп. инструкция для LLM <span className="text-neutral-500 font-normal">(необязательно)</span>
               </label>
               <input
                 type="text"
                 value={additionalPrompt}
                 onChange={(e) => setAdditionalPrompt(e.target.value)}
                 placeholder="Например: решения формулируй официально"
-                className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-indigo-500 placeholder-slate-600"
+                className="w-full py-2 px-3 rounded-xl bg-neutral-900 border border-neutral-700 text-white text-xs focus:outline-none focus:border-neutral-500 placeholder-neutral-600"
               />
             </div>
           </div>
@@ -354,13 +354,13 @@ export const TemplateManager: React.FC = () => {
                     <span
                       key={s.key}
                       title={`${s.label} (${s.value_type})`}
-                      className="px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-[11px] font-mono text-indigo-300"
+                      className="px-2 py-0.5 rounded-md bg-neutral-900 border border-neutral-700 text-[11px] font-mono text-neutral-300"
                     >
                       {s.key}
                     </span>
                   ))}
                   {preview.slots.length > 20 && (
-                    <span className="text-[11px] text-slate-400">+{preview.slots.length - 20} ещё</span>
+                    <span className="text-[11px] text-neutral-400">+{preview.slots.length - 20} ещё</span>
                   )}
                 </div>
               )}
@@ -385,7 +385,7 @@ export const TemplateManager: React.FC = () => {
               type="button"
               onClick={handleCheck}
               disabled={!file || checking || uploading}
-              className="flex items-center gap-1.5 py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all border border-slate-700 disabled:opacity-50"
+              className="flex items-center gap-1.5 py-2 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold transition-all border border-neutral-700 disabled:opacity-50"
             >
               {checking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
               <span>{checking ? "Проверка..." : "Проверить поля"}</span>
@@ -394,7 +394,7 @@ export const TemplateManager: React.FC = () => {
               type="button"
               onClick={handleUpload}
               disabled={!file || !name.trim() || uploading || checking}
-              className="flex items-center gap-1.5 py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-md shadow-indigo-600/25 disabled:opacity-50"
+              className="flex items-center gap-1.5 py-2 px-4 rounded-xl bg-white hover:bg-neutral-200 text-neutral-950 text-xs font-semibold transition-all shadow-md  disabled:opacity-50"
             >
               {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
               <span>{uploading ? "Загрузка..." : "Загрузить шаблон"}</span>
@@ -405,7 +405,7 @@ export const TemplateManager: React.FC = () => {
 
       {/* Notice (detach info / delete errors) */}
       {notice && (
-        <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-200 text-xs flex items-center gap-2">
+        <div className="p-3 rounded-xl bg-neutral-800/70 border border-neutral-700 text-neutral-200 text-xs flex items-center gap-2">
           <FileText className="w-4 h-4 shrink-0" />
           <span className="flex-1">{notice}</span>
           <button type="button" onClick={() => setNotice("")} className="underline font-semibold shrink-0">
@@ -416,7 +416,7 @@ export const TemplateManager: React.FC = () => {
 
       {/* List */}
       {loading ? (
-        <div className="flex items-center justify-center gap-2 py-8 text-slate-400 text-xs">
+        <div className="flex items-center justify-center gap-2 py-8 text-neutral-400 text-xs">
           <Loader2 className="w-4 h-4 animate-spin" />
           <span>Загрузка шаблонов...</span>
         </div>
@@ -429,7 +429,7 @@ export const TemplateManager: React.FC = () => {
           </button>
         </div>
       ) : templates.length === 0 ? (
-        <div className="p-6 rounded-xl bg-slate-950/60 border border-slate-800 text-center text-xs text-slate-400">
+        <div className="p-6 rounded-xl bg-neutral-950/60 border border-neutral-800 text-center text-xs text-neutral-400">
           Шаблонов пока нет. Загрузите первый .docx через кнопку выше.
         </div>
       ) : (
@@ -442,14 +442,14 @@ export const TemplateManager: React.FC = () => {
             return (
               <div
                 key={t.id}
-                className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 hover:border-slate-700 transition-colors"
+                className="p-3.5 rounded-xl bg-neutral-950/60 border border-neutral-800 hover:border-neutral-700 transition-colors"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="text-sm font-semibold text-white truncate">{t.name}</p>
                       {isDefault && (
-                        <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 text-[10px] font-semibold">
+                        <span className="px-2 py-0.5 rounded-full bg-neutral-800/70 text-neutral-300 border border-neutral-700 text-[10px] font-semibold">
                           Системный
                         </span>
                       )}
@@ -464,9 +464,9 @@ export const TemplateManager: React.FC = () => {
                       )}
                     </div>
                     {t.description && (
-                      <p className="text-[11px] text-slate-400 mt-1 truncate">{t.description}</p>
+                      <p className="text-[11px] text-neutral-400 mt-1 truncate">{t.description}</p>
                     )}
-                    <p className="text-[11px] text-slate-500 mt-1 font-mono">
+                    <p className="text-[11px] text-neutral-500 mt-1 font-mono">
                       {t.slots_count} полей • {t.detail_level || "standard"}
                       {t.created_at && ` • ${new Date(t.created_at).toLocaleDateString("ru-RU")}`}
                     </p>
@@ -477,7 +477,7 @@ export const TemplateManager: React.FC = () => {
                       type="button"
                       onClick={() => toggleExpanded(t.id)}
                       title={isOpen ? "Скрыть поля" : "Показать поля"}
-                      className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                      className="p-1.5 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
                     >
                       <ChevronDown className={`w-4 h-4 transition-transform ${isOpen ? "rotate-180" : ""}`} />
                     </button>
@@ -485,7 +485,7 @@ export const TemplateManager: React.FC = () => {
                       type="button"
                       onClick={() => downloadFileFromUrl(api.getTemplateDownloadUrl(t.id, "working"), `${t.name || "Шаблон"}.docx`)}
                       title="Скачать DOCX"
-                      className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                      className="p-1.5 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
                     >
                       <Download className="w-4 h-4" />
                     </button>
@@ -496,8 +496,8 @@ export const TemplateManager: React.FC = () => {
                       title="Проверить модель на своём транскрипте"
                       className={`flex items-center gap-1.5 py-1.5 px-2.5 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-50 ${
                         activeTestId === t.id
-                          ? "bg-violet-600 text-white"
-                          : "bg-violet-500/10 border border-violet-500/20 text-violet-300 hover:bg-violet-500/20"
+                          ? "bg-white text-neutral-950"
+                          : "bg-neutral-800/70 border border-neutral-700 text-neutral-300 hover:bg-neutral-800/70"
                       }`}
                     >
                       {testing[t.id] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" />}
@@ -509,7 +509,7 @@ export const TemplateManager: React.FC = () => {
                         onClick={() => handleDelete(t)}
                         disabled={deletingId === t.id}
                         title="Удалить шаблон"
-                        className="p-1.5 rounded-lg hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 transition-colors disabled:opacity-50"
+                        className="p-1.5 rounded-lg hover:bg-rose-500/20 text-neutral-400 hover:text-rose-300 transition-colors disabled:opacity-50"
                       >
                         {deletingId === t.id ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
@@ -523,7 +523,7 @@ export const TemplateManager: React.FC = () => {
 
                 {/* Slots */}
                 {isOpen && (
-                  <div className="mt-3 pt-3 border-t border-slate-800/80">
+                  <div className="mt-3 pt-3 border-t border-neutral-800/80">
                     {t.slots && t.slots.length > 0 ? (
                       <div className="flex flex-wrap gap-1.5">
                         {t.slots.map((s) => {
@@ -536,11 +536,11 @@ export const TemplateManager: React.FC = () => {
                               className={`px-2 py-0.5 rounded-md border text-[11px] font-mono flex items-center gap-1.5 ${
                                 isRepeat
                                   ? "bg-amber-950/30 border-amber-500/40 text-amber-300"
-                                  : "bg-slate-900 border-slate-700 text-indigo-300"
+                                  : "bg-neutral-900 border-neutral-700 text-neutral-300"
                               }`}
                             >
                               <span>{s.key}</span>
-                              <span className={`text-[9px] px-1 py-0.2 rounded ${isRepeat ? "bg-amber-500/20 text-amber-300 font-semibold" : "bg-slate-800 text-slate-400"}`}>
+                              <span className={`text-[9px] px-1 py-0.2 rounded ${isRepeat ? "bg-amber-500/20 text-amber-300 font-semibold" : "bg-neutral-800 text-neutral-400"}`}>
                                 {kindLabel}
                               </span>
                             </span>
@@ -548,30 +548,30 @@ export const TemplateManager: React.FC = () => {
                         })}
                       </div>
                     ) : (
-                      <p className="text-[11px] text-slate-500">Поля не найдены</p>
+                      <p className="text-[11px] text-neutral-500">Поля не найдены</p>
                     )}
                   </div>
                 )}
 
                 {/* Test workspace: user's transcript -> model -> rendered protocol */}
                 {activeTestId === t.id && (
-                  <div className="mt-4 pt-4 border-t border-violet-500/20 space-y-4">
+                  <div className="mt-4 pt-4 border-t border-neutral-700 space-y-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h4 className="text-xs font-semibold text-white flex items-center gap-2">
-                          <FlaskConical className="w-4 h-4 text-violet-400" />
+                          <FlaskConical className="w-4 h-4 text-neutral-300" />
                           Проверка модели на вашем транскрипте
                         </h4>
-                        <p className="text-[11px] text-slate-400 mt-1">
+                        <p className="text-[11px] text-neutral-400 mt-1">
                           Загрузите текстовый файл транскрипта или вставьте текст ниже, чтобы проверить заполнение этого шаблона.
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
-                        <label className="text-[11px] text-slate-400">Детализация:</label>
+                        <label className="text-[11px] text-neutral-400">Детализация:</label>
                         <select
                           value={testDetailLevel}
                           onChange={(e) => setTestDetailLevel(e.target.value as any)}
-                          className="py-1 px-2 text-xs rounded-lg bg-slate-900 border border-slate-700 text-slate-200 focus:outline-none focus:border-violet-500"
+                          className="py-1 px-2 text-xs rounded-lg bg-neutral-900 border border-neutral-700 text-neutral-200 focus:outline-none focus:border-neutral-500"
                         >
                           {DETAIL_LEVELS.map((dl) => (
                             <option key={dl.value} value={dl.value}>
@@ -583,8 +583,8 @@ export const TemplateManager: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <label className="flex items-center gap-1.5 py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold cursor-pointer transition-colors">
-                        <FileUp className="w-3.5 h-3.5 text-violet-400" />
+                      <label className="flex items-center gap-1.5 py-1.5 px-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-200 text-xs font-semibold cursor-pointer transition-colors">
+                        <FileUp className="w-3.5 h-3.5 text-neutral-300" />
                         <span>{testTranscriptFile || "Загрузить файл транскрипта (.txt)"}</span>
                         <input
                           type="file"
@@ -600,7 +600,7 @@ export const TemplateManager: React.FC = () => {
                             setTestTranscript("");
                             setTestTranscriptFile("");
                           }}
-                          className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+                          className="p-1.5 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white"
                           title="Очистить"
                         >
                           <X className="w-3.5 h-3.5" />
@@ -616,7 +616,7 @@ export const TemplateManager: React.FC = () => {
                         if (testTranscriptFile) setTestTranscriptFile("");
                       }}
                       placeholder="Или вставьте транскрипт совещания сюда..."
-                      className="w-full p-3 text-xs rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 leading-relaxed resize-y"
+                      className="w-full p-3 text-xs rounded-xl bg-neutral-900 border border-neutral-700 text-white placeholder-neutral-500 focus:outline-none focus:border-neutral-500 leading-relaxed resize-y"
                     />
 
                     {testErr && (
@@ -627,7 +627,7 @@ export const TemplateManager: React.FC = () => {
                     )}
 
                     <div className="flex items-center justify-between gap-3 flex-wrap">
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[10px] text-neutral-500">
                         {testTranscript.trim().length.toLocaleString("ru-RU")} символов
                       </span>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -635,7 +635,7 @@ export const TemplateManager: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => downloadFileFromUrl(api.getTestDocxDownloadUrl(t.id), `Тест_${t.name || "шаблон"}.docx`)}
-                            className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold"
+                            className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-200 text-xs font-semibold"
                           >
                             <Download className="w-3.5 h-3.5" />
                             <span>Тестовый DOCX</span>
@@ -655,7 +655,7 @@ export const TemplateManager: React.FC = () => {
                           type="button"
                           onClick={() => handleTest(t.id)}
                           disabled={!!testing[t.id] || !testTranscript.trim()}
-                          className="flex items-center gap-1.5 py-2 px-4 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold shadow-md shadow-violet-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="flex items-center gap-1.5 py-2 px-4 rounded-xl bg-white hover:bg-neutral-200 text-neutral-950 text-xs font-semibold shadow-md  disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {testing[t.id] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                           <span>{testing[t.id] ? "Модель формирует протокол..." : "Запустить тест модели"}</span>
@@ -690,16 +690,16 @@ export const TemplateManager: React.FC = () => {
                             </button>
                           </div>
                         </div>
-                        <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/80">
+                        <div className="max-h-72 overflow-y-auto divide-y divide-neutral-800/80">
                           {Object.entries(result.values).map(([key, value]) => {
                             const slot = t.slots.find((s) => s.key === key);
                             return (
                               <div key={key} className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-1.5 md:gap-4 px-3 py-2.5 text-[11px]">
                                 <div className="min-w-0">
-                                  <p className="font-medium text-slate-300 truncate">{slot?.label || key}</p>
-                                  <p className="font-mono text-slate-600 truncate">{key}</p>
+                                  <p className="font-medium text-neutral-300 truncate">{slot?.label || key}</p>
+                                  <p className="font-mono text-neutral-600 truncate">{key}</p>
                                 </div>
-                                <pre className="whitespace-pre-wrap break-words font-sans text-slate-200 leading-relaxed">
+                                <pre className="whitespace-pre-wrap break-words font-sans text-neutral-200 leading-relaxed">
                                   {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
                                 </pre>
                               </div>
@@ -719,17 +719,17 @@ export const TemplateManager: React.FC = () => {
       {/* Delete Template Confirmation Modal */}
       {templateToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-150">
-          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-6 text-slate-100">
+          <div className="w-full max-w-md rounded-2xl bg-neutral-900 border border-neutral-700 shadow-2xl p-6 text-neutral-100">
             <div className="flex items-center gap-3 mb-4 text-rose-400">
               <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center shrink-0">
                 <Trash2 className="w-5 h-5 text-rose-400" />
               </div>
               <div>
                 <h3 className="text-base font-bold text-white">Удалить шаблон?</h3>
-                <p className="text-xs text-slate-400">Это действие нельзя отменить</p>
+                <p className="text-xs text-neutral-400">Это действие нельзя отменить</p>
               </div>
             </div>
-            <p className="text-sm text-slate-300 mb-6 leading-relaxed">
+            <p className="text-sm text-neutral-300 mb-6 leading-relaxed">
               Вы действительно хотите удалить шаблон <span className="font-semibold text-white">«{templateToDelete.name}»</span>?
               Файлы шаблона будут удалены, а привязанные совещания автоматически переключатся на стандартный протокол.
             </p>
@@ -737,7 +737,7 @@ export const TemplateManager: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setTemplateToDelete(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
+                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold transition-colors"
               >
                 Отмена
               </button>

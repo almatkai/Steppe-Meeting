@@ -10,8 +10,10 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
+        "label": "main",
         "title": "Steppe Meeting",
         "width": 1280,
         "height": 840,
@@ -21,6 +23,23 @@
         "decorations": true,
         "transparent": false,
         "devtools": true
+      },
+      {
+        "label": "mini",
+        "title": "Steppe Mini",
+        "url": "index.html?mode=mini",
+        "width": 320,
+        "height": 36,
+        "center": true,
+        "decorations": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "alwaysOnTop": true,
+        "resizable": false,
+        "visible": false,
+        "shadow": false,
+        "contentProtected": true,
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
@@ -29,12 +48,24 @@
   },
   "bundle": {
     "active": true,
+    "macOS": {
+      "entitlements": "Entitlements.plist",
+      "signingIdentity": "-"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../backend/*.py": "backend/",
+      "../backend/engine/*.py": "backend/engine/",
+      "../backend/engine/core/*.py": "backend/engine/core/",
+      "../backend/run_backend.sh": "backend/run_backend.sh",
+      "../backend/requirements.txt": "backend/requirements.txt",
+      "../public/templates/ideal-protocol-template.docx": "public/templates/ideal-protocol-template.docx"
+    }
   }
 }

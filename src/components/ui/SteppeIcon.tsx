@@ -1,4 +1,4 @@
-import React, { useId } from "react";
+import React from "react";
 
 interface SteppeIconProps extends React.SVGProps<SVGSVGElement> {
   className?: string;
@@ -40,39 +40,21 @@ export const SteppeIcon: React.FC<SteppeIconProps> = ({
 
 /**
  * SteppeLogo — full app emblem. Pure vector, no PNG.
- * Deep indigo→sky squircle, white audio bars, cyan steppe horizon.
+ * Solid neutral squircle, white audio bars and steppe horizon.
  * Sharp at 32px sidebar and at 512px splash.
  */
 export const SteppeLogo: React.FC<{
   className?: string;
 }> = ({ className = "w-9 h-9" }) => {
-  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
-  const bgId = `steppe-bg-${uid}`;
-  const glossId = `steppe-gloss-${uid}`;
-
   return (
     <svg
       viewBox="0 0 48 48"
-      className={`${className} shrink-0 drop-shadow-[0_4px_12px_rgba(79,70,229,0.45)]`}
+      className={`${className} shrink-0`}
       role="img"
       aria-label="Steppe Meeting"
     >
-      <defs>
-        <linearGradient id={bgId} x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#818CF8" />
-          <stop offset="0.45" stopColor="#4F46E5" />
-          <stop offset="1" stopColor="#0EA5E9" />
-        </linearGradient>
-        <linearGradient id={glossId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#FFFFFF" stopOpacity="0.28" />
-          <stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-
-      {/* squircle base */}
-      <rect x="1" y="1" width="46" height="46" rx="13" fill={`url(#${bgId})`} />
-      {/* top gloss */}
-      <rect x="1" y="1" width="46" height="24" rx="13" fill={`url(#${glossId})`} />
+      {/* Solid squircle base */}
+      <rect x="1" y="1" width="46" height="46" rx="13" fill="#404040" />
       {/* inner border */}
       <rect
         x="1.5"
@@ -99,7 +81,7 @@ export const SteppeLogo: React.FC<{
       <path
         d="M7 35.5 Q24 31.5 41 35.5"
         fill="none"
-        stroke="#7DD3FC"
+        stroke="#FFFFFF"
         strokeWidth="2.2"
         strokeLinecap="round"
         opacity="0.95"

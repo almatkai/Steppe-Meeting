@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { Meeting, SystemStatus } from "../types";
 import { api } from "../services/api";
+import { openMiniWindow, restoreMainWindow } from "../utils/tauriWindow";
+import { toast } from "sonner";
 
 interface MeetingStore {
   currentView: "wizard" | "meeting" | "history" | "settings" | "chat";
@@ -9,9 +11,11 @@ interface MeetingStore {
   meetings: Meeting[];
   isLoading: boolean;
   systemStatus: SystemStatus | null;
+  isMiniMode: boolean;
 
   setView: (view: "wizard" | "meeting" | "history" | "settings" | "chat") => void;
   setActiveMeetingId: (id: string | null) => void;
+  setMiniMode: (isMini: boolean) => Promise<void>;
   loadMeetings: () => Promise<void>;
   selectMeeting: (id: string) => Promise<void>;
   deleteMeeting: (id: string) => Promise<void>;
@@ -26,6 +30,7 @@ export const useMeetingStore = create<MeetingStore>((set, get) => ({
   meetings: [],
   isLoading: false,
   systemStatus: null,
+  isMiniMode: false,
 
   setView: (view) => set({ currentView: view }),
 
@@ -35,6 +40,22 @@ export const useMeetingStore = create<MeetingStore>((set, get) => ({
       get().selectMeeting(id);
     } else {
       set({ activeMeeting: null });
+    }
+  },
+
+  setMiniMode: async (isMini: boolean) => {
+    try {
+      if (isMini) {
+        await openMiniWindow();
+      } else {
+        await restoreMainWindow();
+      }
+      set({ isMiniMode: isMini });
+    } catch (error) {
+      console.error("Failed to switch native windows", error);
+      toast.error("Не удалось переключить окно", {
+        description: String(error),
+      });
     }
   },
 
@@ -80,6 +101,7 @@ export const useMeetingStore = create<MeetingStore>((set, get) => ({
       const status = await api.getSystemStatus();
       set({ systemStatus: status });
     } catch (e) {
+      set({ systemStatus: null });
       console.error("Failed to fetch system status", e);
     }
   },

@@ -48,8 +48,12 @@ pub fn start_native_recording(
     }
 
     // 1. Get displays to capture system audio from the active display
-    let content = SCShareableContent::get()
-        .map_err(|e| format!("Failed to get shareable content (check Screen Recording permissions): {:?}", e))?;
+    let content = SCShareableContent::get().map_err(|e| {
+        format!(
+            "Failed to get shareable content (check Screen Recording permissions): {:?}",
+            e
+        )
+    })?;
 
     let displays = content.displays();
     let display = displays
@@ -82,8 +86,7 @@ pub fn start_native_recording(
     let output_path = temp_dir.join(filename);
 
     // 5. Configure recording output
-    let rec_config = SCRecordingOutputConfiguration::new()
-        .with_output_url(&output_path);
+    let rec_config = SCRecordingOutputConfiguration::new().with_output_url(&output_path);
 
     let recording = SCRecordingOutput::new(&rec_config)
         .ok_or_else(|| "Failed to create SCRecordingOutput on macOS".to_string())?;
@@ -159,6 +162,15 @@ pub fn open_screen_recording_settings() {
     let _ = std::process::Command::new("open")
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
         .spawn();
+}
+
+#[tauri::command]
+pub fn open_microphone_settings() -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

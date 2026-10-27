@@ -1,17 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Mic,
-  MicOff,
-  Volume2,
-  VolumeX,
+  Microphone as Mic,
+  MicrophoneSlash as MicOff,
+  SpeakerHigh as Volume2,
+  SpeakerSlash as VolumeX,
   Square,
-  Trash2,
-  CheckCircle2,
+  Trash as Trash2,
+  CheckCircle as CheckCircle2,
   Info,
-  Sliders,
-  AlertTriangle,
-  Zap,
-} from "lucide-react";
+  SlidersHorizontal as Sliders,
+  Warning as AlertTriangle,
+  Lightning as Zap,
+} from "@phosphor-icons/react";
 
 interface AudioRecorderProps {
   onAudioReady: (file: File | null) => void;
@@ -153,10 +153,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
           // Clear background
           ctx.clearRect(0, 0, width, height);
-          const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
-          bgGrad.addColorStop(0, "#030712");
-          bgGrad.addColorStop(1, "#0b0f19");
-          ctx.fillStyle = bgGrad;
+          ctx.fillStyle = "#0a0a0a";
           ctx.fillRect(0, 0, width, height);
 
           // State 1: Active Live Recording
@@ -199,17 +196,12 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
               const y = centerY - smoothed / 2;
 
-              const gradient = ctx.createLinearGradient(0, y, 0, y + smoothed);
-              gradient.addColorStop(0, "#38bdf8");
-              gradient.addColorStop(0.5, "#6366f1");
-              gradient.addColorStop(1, "#a855f7");
-
               ctx.save();
               if (rawVal > 35) {
                 ctx.shadowBlur = 12;
                 ctx.shadowColor = "rgba(99, 102, 241, 0.6)";
               }
-              ctx.fillStyle = gradient;
+              ctx.fillStyle = "#d4d4d4";
               drawRoundedBar(ctx, x, y, barWidth, smoothed, 3);
               ctx.restore();
             }
@@ -222,12 +214,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
               const barHeight = Math.max(8, pseudo * height * 0.68);
               const y = centerY - barHeight / 2;
 
-              const grad = ctx.createLinearGradient(0, y, 0, y + barHeight);
-              grad.addColorStop(0, "#34d399");
-              grad.addColorStop(0.6, "#10b981");
-              grad.addColorStop(1, "#059669");
-
-              ctx.fillStyle = grad;
+              ctx.fillStyle = "#10b981";
               drawRoundedBar(ctx, x, y, barWidth, barHeight, 3);
             }
           }
@@ -622,7 +609,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
   };
 
   return (
-    <div className="rounded-2xl border border-slate-700/80 bg-slate-900/50 p-6 space-y-4">
+    <div className="rounded-2xl border border-neutral-700/80 bg-neutral-900/50 p-6 space-y-4">
       {error && (
         <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 text-xs flex items-start gap-2.5">
           <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
@@ -651,7 +638,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                         await invoke("open_screen_recording_settings");
                       } catch (_) {}
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 border border-indigo-500/40 text-xs font-medium cursor-pointer transition-colors flex items-center gap-1.5"
+                    className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-medium cursor-pointer transition-colors flex items-center gap-1.5"
                   >
                     ⚙️ Настройки записи звука Mac
                   </button>
@@ -672,9 +659,9 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
       {/* Audio Source Selector Toggles (Mic + System Sound) */}
       {!isRecording && !recordedFile && (
         <div className="space-y-2.5">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-slate-950/70 border border-slate-800">
-            <div className="text-xs text-slate-300 font-medium flex items-center gap-2">
-              <Sliders className="w-4 h-4 text-indigo-400" />
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-neutral-950/70 border border-neutral-800">
+            <div className="text-xs text-neutral-300 font-medium flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-neutral-400" />
               <span>Источники аудио:</span>
             </div>
 
@@ -688,14 +675,14 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                 }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border ${
                   includeMic
-                    ? "bg-indigo-600/20 text-indigo-300 border-indigo-500/40 shadow-sm"
-                    : "bg-slate-900/60 text-slate-500 border-slate-800 hover:text-slate-400"
+                    ? "bg-neutral-800/70 text-neutral-200 border-neutral-700 shadow-sm"
+                    : "bg-neutral-900/60 text-neutral-500 border-neutral-800 hover:text-neutral-400"
                 }`}
                 title="Записывать ваш голос через микрофон"
               >
-                {includeMic ? <Mic className="w-3.5 h-3.5 text-indigo-400" /> : <MicOff className="w-3.5 h-3.5" />}
+                {includeMic ? <Mic className="w-3.5 h-3.5 text-neutral-400" /> : <MicOff className="w-3.5 h-3.5" />}
                 <span>Микрофон</span>
-                {includeMic && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 ml-0.5" />}
+                {includeMic && <span className="w-1.5 h-1.5 rounded-full bg-neutral-300 ml-0.5" />}
               </button>
 
               {/* System Sound Toggle */}
@@ -723,26 +710,26 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                 }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border ${
                   includeSystem
-                    ? "bg-indigo-600/20 text-indigo-300 border-indigo-500/40 shadow-sm"
-                    : "bg-slate-900/60 text-slate-500 border-slate-800 hover:text-slate-400"
+                    ? "bg-neutral-800/70 text-neutral-200 border-neutral-700 shadow-sm"
+                    : "bg-neutral-900/60 text-neutral-500 border-neutral-800 hover:text-neutral-400"
                 }`}
                 title="Записывать системный звук (собеседников в Zoom, Meet, Teams, звонках или видео)"
               >
                 {includeSystem ? (
-                  <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                  <Volume2 className="w-3.5 h-3.5 text-neutral-400" />
                 ) : (
                   <VolumeX className="w-3.5 h-3.5" />
                 )}
                 <span>Звук системы</span>
-                {includeSystem && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 ml-0.5" />}
+                {includeSystem && <span className="w-1.5 h-1.5 rounded-full bg-neutral-300 ml-0.5" />}
               </button>
             </div>
           </div>
 
           {/* Guidance Info Banner */}
           {includeSystem && (
-            <div className="p-3 rounded-xl bg-indigo-950/30 border border-indigo-500/25 text-xs text-indigo-200/90 flex items-start gap-2.5 leading-relaxed">
-              <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+            <div className="p-3 rounded-xl bg-neutral-900/60 border border-neutral-800 text-xs text-neutral-300 flex items-start gap-2.5 leading-relaxed">
+              <Info className="w-4 h-4 text-neutral-400 shrink-0 mt-0.5" />
               <span>
                 {(isTauri || checkIsTauri()) ? (
                   <>
@@ -761,7 +748,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
       <div className="flex flex-col items-center justify-center">
         {/* Dynamic Waveform Visualizer Canvas */}
-        <div className="w-full h-28 mb-4 rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 relative flex items-center justify-center shadow-inner">
+        <div className="w-full h-28 mb-4 rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-950 relative flex items-center justify-center shadow-inner">
           <canvas ref={canvasRef} className="w-full h-full block" />
 
           {/* Status Overlay Badges */}
@@ -782,13 +769,13 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
           {!isRecording && !recordedFile && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-slate-900/80 border border-slate-800/80 text-slate-400 text-xs font-medium backdrop-blur-sm shadow-sm">
+              <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-neutral-900/80 border border-neutral-800/80 text-neutral-400 text-xs font-medium backdrop-blur-sm shadow-sm">
                 {includeSystem && includeMic ? (
-                  <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                  <Volume2 className="w-3.5 h-3.5 text-neutral-400" />
                 ) : includeSystem ? (
-                  <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                  <Volume2 className="w-3.5 h-3.5 text-neutral-400" />
                 ) : (
-                  <Mic className="w-3.5 h-3.5 text-indigo-400" />
+                  <Mic className="w-3.5 h-3.5 text-neutral-400" />
                 )}
                 <span>
                   {includeMic && includeSystem
@@ -832,7 +819,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
             <button
               type="button"
               onClick={startRecording}
-              className="flex items-center gap-2.5 py-3 px-8 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-medium text-sm transition-all shadow-lg shadow-indigo-600/30 active:scale-95 cursor-pointer"
+              className="flex items-center gap-2.5 py-3 px-8 rounded-xl bg-white hover:bg-neutral-300 text-neutral-950 font-medium text-sm transition-all active:scale-95 cursor-pointer"
             >
               {includeSystem && includeMic ? (
                 <Volume2 className="w-4 h-4" />
@@ -855,7 +842,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
             <button
               type="button"
               onClick={stopRecording}
-              className="flex items-center gap-2.5 py-3 px-8 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-medium text-sm transition-all shadow-lg shadow-rose-600/30 active:scale-95 cursor-pointer animate-pulse"
+              className="flex items-center gap-2.5 py-3 px-8 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-medium text-sm transition-all shadow-lg shadow-rose-600/30 active:scale-95 cursor-pointer animate-pulse"
             >
               <Square className="w-4 h-4 fill-current" />
               <span>Остановить запись</span>
@@ -865,7 +852,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
           {recordedFile && !isRecording && (
             <div className="flex flex-col items-center gap-3 w-full max-w-lg">
               {/* Audio Player Card */}
-              <div className="w-full p-4 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col gap-3 shadow-inner">
+              <div className="w-full p-4 rounded-xl bg-neutral-950/80 border border-neutral-800 flex flex-col gap-3 shadow-inner">
                 <div className="flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2 text-emerald-400 font-medium">
                     <CheckCircle2 className="w-4 h-4" />
@@ -881,7 +868,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                   <button
                     type="button"
                     onClick={discardRecording}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 text-xs transition-colors cursor-pointer"
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 text-xs transition-colors cursor-pointer"
                     title="Удалить запись"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -896,7 +883,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                     src={audioUrl}
                     controls
                     preload="auto"
-                    className="w-full h-11 rounded-lg accent-indigo-500 bg-slate-900 border border-slate-800"
+                    className="w-full h-11 rounded-lg accent-neutral-200 bg-neutral-900 border border-neutral-800"
                     onLoadedMetadata={(e) => {
                       if (
                         e.currentTarget.duration &&
@@ -909,7 +896,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                   />
                 )}
 
-                <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono px-0.5">
+                <div className="flex items-center justify-between text-[11px] text-neutral-500 font-mono px-0.5">
                   <span>
                     Размер:{" "}
                     {recordedFile.size < 1024 * 1024

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mini-window",
+  "description": "Allow dragging the dedicated floating Mini Mode window.",
+  "windows": ["mini"],
+  "permissions": ["core:window:allow-start-dragging"]
+}
