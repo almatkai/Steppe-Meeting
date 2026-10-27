@@ -3,6 +3,7 @@ import path from "path";
 
 export default defineConfig({
   base: "./",
+  envPrefix: ["VITE_", "TAURI_ENV_"],
   esbuild: {
     jsx: "automatic",
   },

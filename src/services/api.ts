@@ -1,4 +1,4 @@
-import type { CliProviderId, CliCheckResult, CliModelsResult, CliTestResult } from "../types";
+import type { ReleaseUpdate, UpdateChannel, CliProviderId, CliCheckResult, CliModelsResult, CliTestResult } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import type { CaptionChunk, CaptionResult, StreamingTranscript } from "../utils/liveCaptions";
 import type { Meeting, Participant, SystemConfig, SystemStatus, WhisperStatus, ChatSession, ChatMessage, Citation, ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../types";
@@ -248,9 +248,11 @@ export const api = {
     return res.json();
   },
 
-  async listModels(): Promise<string[]> {
-    const res = await backendFetch(`${API_BASE}/system/models`);
-    if (!res.ok) return ["qwen2.5:latest", "llama3.2:latest"];
+  async listModels(connection?: { base_url: string; api_key: string }): Promise<string[]> {
+    const res = await backendFetch(`${API_BASE}/system/models`, connection ? {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(connection),
+    } : undefined);
+    if (!res.ok) throw new Error(`Не удалось получить список моделей (HTTP ${res.status})`);
     return res.json();
   },
 
@@ -258,6 +260,26 @@ export const api = {
     const res = await backendFetch(`${API_BASE}/system/config`);
     if (!res.ok) throw new Error(`Failed to get config: ${res.statusText}`);
     return res.json();
+  },
+
+  async checkUpdates(query: { current_version: string; channel: UpdateChannel; platform: string; arch: string; force: boolean }): Promise<ReleaseUpdate> {
+    const params = new URLSearchParams({ ...query, force: String(query.force) });
+    const res = await backendFetch(`${API_BASE}/system/updates?${params}`, { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error(`Не удалось проверить обновления (HTTP ${res.status})`);
+    return res.json();
+  },
+
+  async saveUpdateChannel(channel: UpdateChannel): Promise<{ channel: UpdateChannel }> {
+    const res = await backendFetch(`${API_BASE}/system/updates/channel`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(typeof body.detail === 'string' ? body.detail : 'Не удалось сохранить канал обновлений');
+    }
+    const body = await res.json();
+    if (body?.channel !== channel) throw new Error('Локальный сервер не подтвердил канал обновлений');
+    return body;
   },
 
   async checkCli(provider: CliProviderId, path?: string): Promise<CliCheckResult> {
@@ -278,9 +300,11 @@ export const api = {
     });
     if (!res.ok) {
       const error = await res.json().catch(() => ({}));
-      throw new Error(error.detail || `Failed to save config: ${res.statusText}`);
+      throw new Error(typeof error.detail === 'string' ? error.detail : `Не удалось сохранить настройки (HTTP ${res.status})`);
     }
-    return res.json();
+    const body = await res.json();
+    if (body?.success !== true) throw new Error('Локальный сервер не подтвердил сохранение настроек');
+    return body;
   },
 
   // Whisper STT Management

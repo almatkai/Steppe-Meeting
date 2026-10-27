@@ -117,3 +117,12 @@ html.mini-mode #root {
 .cli-settings input[type="radio"], .cli-settings input[type="checkbox"] {
   accent-color: #a3a3a3;
 }
+
+.settings-view :is(button, input, select):focus-visible {
+  outline: 1px solid #737373;
+  outline-offset: 3px;
+}
+.settings-view label:has(input[type="radio"]:focus-visible) {
+  outline: 1px solid #737373;
+  outline-offset: 2px;
+}

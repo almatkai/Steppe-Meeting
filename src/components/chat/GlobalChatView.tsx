@@ -18,6 +18,7 @@ import {
   CaretRight as ChevronRight,
   MagnifyingGlass as Search,
 } from "@phosphor-icons/react";
+import { ConfirmDeleteDialog } from "../ui/ConfirmDeleteDialog";
 import { api } from "../../services/api";
 import { useMeetingStore } from "../../store/useMeetingStore";
 import { SteppeIcon, SteppeLogo } from "../ui/SteppeIcon";
@@ -27,6 +28,8 @@ import type { ChatSession, ChatMessage, Citation } from "../../types";
 export const GlobalChatView: React.FC = () => {
   const { selectMeeting } = useMeetingStore();
 
+  const [sessionToDelete, setSessionToDelete] = useState<ChatSession | null>(null);
+  const [deleteError, setDeleteError] = useState("");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -114,8 +117,10 @@ export const GlobalChatView: React.FC = () => {
     }
   };
 
-  const handleDeleteSession = async (e: React.MouseEvent, sessionId: string) => {
-    e.stopPropagation();
+  const handleDeleteSession = async (sessionId: string) => {
+    setSessionToDelete(null);
+    setDeleteError("");
+    if (activeSessionId === sessionId) handleStopStream();
     try {
       await api.deleteChatSession(sessionId);
       const remaining = sessions.filter((s) => s.id !== sessionId);
@@ -124,7 +129,7 @@ export const GlobalChatView: React.FC = () => {
         setActiveSessionId(remaining.length > 0 ? remaining[0].id : null);
       }
     } catch (err) {
-      console.error("Failed to delete session:", err);
+      setDeleteError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -244,6 +249,9 @@ export const GlobalChatView: React.FC = () => {
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-neutral-950 select-none">
+      <ConfirmDeleteDialog open={!!sessionToDelete} onOpenChange={(open) => { if (!open) setSessionToDelete(null); }}
+        title="Удалить диалог?" confirmLabel="Удалить диалог" description={`Диалог «${sessionToDelete?.title || 'Новый диалог'}» и все его сообщения будут удалены без возможности восстановления.`}
+        onConfirm={() => { if (sessionToDelete) void handleDeleteSession(sessionToDelete.id); }} />
       {/* ------------------------------------------------------------- */}
       {/* Left Pane: Sessions & Knowledge Base Stats */}
       {/* ------------------------------------------------------------- */}
@@ -273,6 +281,7 @@ export const GlobalChatView: React.FC = () => {
             </button>
           </div>
 
+          {deleteError && <p role="alert" className="px-4 py-2 text-xs text-neutral-300">Не удалось удалить диалог: {deleteError}</p>}
           {/* Session List */}
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {isLoadingSessions ? (
@@ -308,8 +317,8 @@ export const GlobalChatView: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={(e) => handleDeleteSession(e, s.id)}
-                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded-md hover:bg-rose-500/10 text-neutral-500 hover:text-rose-400 transition-all cursor-pointer"
+                      onClick={(e) => { e.stopPropagation(); setSessionToDelete(s); }}
+                      className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-500 p-1.5 rounded-md hover:bg-rose-500/10 text-neutral-500 hover:text-rose-400 transition-all cursor-pointer"
                       title="Удалить диалог"
                     >
                       <Trash2 className="w-3.5 h-3.5" />

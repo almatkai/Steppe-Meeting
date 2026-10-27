@@ -2,6 +2,20 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { api } from '../src/services/api.ts';
 
+test('Model discovery sends the current connection without a selected model or saving config', async () => {
+  const original = globalThis.fetch;
+  const calls = [];
+  try {
+    globalThis.fetch = async (url, options) => { calls.push({ url, options }); return Response.json(['model-from-list']); };
+    const connection = { base_url: 'https://draft.example/v1', api_key: 'test-only' };
+    assert.deepEqual(await api.listModels(connection), ['model-from-list']);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].url, /\/system\/models$/);
+    assert.equal(calls[0].options.method, 'POST');
+    assert.deepEqual(JSON.parse(calls[0].options.body), connection);
+  } finally { globalThis.fetch = original; }
+});
+
 test('Unavailable backend gives an actionable error for STT and templates, then recovers on retry', async () => {
   const original = globalThis.fetch;
   try {

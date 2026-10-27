@@ -30,7 +30,7 @@ import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 import urllib.parse
 
 import httpx
@@ -60,6 +60,7 @@ DB_PATH = DATA_DIR / "meetings.db"
 from engine.config import settings
 from live_captions import create_router as create_captions_router
 from recording_streams import RecordingStreams
+from release_updates import checker as update_checker
 from engine import cli_llm, chunking, docx_template, docx_preview, template_generation, template_profile, template_protocol, pdf_export, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
 
 # LLM telemetry is runtime data too, not a repo-relative directory.
@@ -440,6 +441,7 @@ class CliTestRequest(CliRequest):
 
 
 class SystemConfigRequest(BaseModel):
+    update_channel: Optional[Literal["stable", "beta"]] = None
     llm_mode: Optional[str] = None
     llm_cli_provider: Optional[str] = None
     llm_cli: Optional[Dict[str, CliOptions]] = None
@@ -452,6 +454,9 @@ class SystemConfigRequest(BaseModel):
     whisper_base_url: Optional[str] = None
     whisper_model: Optional[str] = None
     whisper_api_key: Optional[str] = None
+
+class UpdateChannelRequest(BaseModel):
+    channel: Literal["stable", "beta"]
 
 class WhisperModelActionRequest(BaseModel):
     model: str
@@ -2359,6 +2364,25 @@ async def delete_whisper_model(req: WhisperModelActionRequest):
 async def list_models():
     llm_url = get_setting("llm_base_url", "http://localhost:11434/v1").rstrip("/")
     api_key = get_setting("llm_api_key", "").strip()
+    return await discover_api_models(llm_url, api_key)
+
+
+class ModelDiscoveryRequest(BaseModel):
+    base_url: str = Field(max_length=4096)
+    api_key: str = Field(default="", max_length=16384)
+
+
+@app.post("/api/v1/system/models")
+async def preview_models(req: ModelDiscoveryRequest):
+    """Discover from the current form without persisting incomplete settings."""
+    url = req.base_url.strip().rstrip("/")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Укажите полный HTTP или HTTPS URL провайдера")
+    return await discover_api_models(url, req.api_key.strip())
+
+
+async def discover_api_models(llm_url: str, api_key: str):
     headers = get_auth_headers(api_key)
 
     tags_url = get_ollama_tags_url(llm_url)
@@ -2415,6 +2439,7 @@ async def pull_model(req: PullModelRequest, background_tasks: BackgroundTasks):
 @app.get("/api/v1/system/config")
 async def get_config():
     return {
+        "update_channel": get_update_channel(),
         "llm_mode": get_setting("llm_mode", "api"),
         "llm_cli_provider": get_setting("llm_cli_provider", "opencode"),
         "llm_cli": get_cli_config(),
@@ -2428,6 +2453,29 @@ async def get_config():
         "whisper_model": get_setting("whisper_model", "whisper-1"),
         "whisper_api_key": get_setting("whisper_api_key", ""),
     }
+
+def get_update_channel() -> Literal["stable", "beta"]:
+    channel = get_setting("update_channel", "stable")
+    return channel if channel in ("stable", "beta") else "stable"
+
+
+@app.get("/api/v1/system/updates")
+async def get_updates(
+    current_version: str = Query(..., max_length=200),
+    channel: Optional[Literal["stable", "beta"]] = None,
+    platform: str = Query("", max_length=32),
+    arch: str = Query("", max_length=32),
+    force: bool = False,
+):
+    return await update_checker.check(current_version, channel or get_update_channel(), platform, arch, force)
+
+
+@app.post("/api/v1/system/updates/channel")
+async def save_update_channel(req: UpdateChannelRequest):
+    # Independent from LLM/STT validation and saves: change exactly one key.
+    set_setting("update_channel", req.channel)
+    return {"channel": req.channel}
+
 
 @app.post("/api/v1/system/config")
 async def save_config(req: SystemConfigRequest):

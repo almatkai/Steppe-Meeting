@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { ConfirmDeleteDialog } from "../ui/ConfirmDeleteDialog";
 import {
   Microphone as Mic,
   MicrophoneSlash as MicOff,
@@ -32,6 +33,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioUrl, setAudioUrl] = useState<string>("");
   const [recordedFile, setRecordedFile] = useState<File | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState("");
 
@@ -598,6 +600,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
     }
     setRecordedFile(null);
     setRecordingTime(0);
+    setDuration(0);
     setError("");
     onAudioReady(null);
   };
@@ -610,6 +613,10 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
   return (
     <div className="rounded-2xl border border-neutral-700/80 bg-neutral-900/50 p-6 space-y-4">
+      <ConfirmDeleteDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}
+        title="Удалить запись?" confirmLabel="Удалить запись"
+        description={`Запись длительностью ${formatTime(duration || recordingTime)} будет удалена без возможности восстановления. После удаления можно записать заново.`}
+        onConfirm={discardRecording} />
       {error && (
         <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 text-xs flex items-start gap-2.5">
           <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
@@ -867,7 +874,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                   </div>
                   <button
                     type="button"
-                    onClick={discardRecording}
+                    onClick={() => setConfirmDiscard(true)}
                     className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 text-xs transition-colors cursor-pointer"
                     title="Удалить запись"
                   >

@@ -16,7 +16,7 @@ const button = 'min-h-8 px-3 py-1.5 rounded-lg border border-neutral-700 text-ne
 
 type Props = {
   config: SystemConfig;
-  onChange: (config: SystemConfig) => void;
+  onChange: (config: SystemConfig, debounce?: boolean) => void;
   checks: Record<string, CliCheckResult>;
   onCheck: (key: string, check: CliCheckResult) => void;
 };
@@ -47,9 +47,9 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
   const ready = check?.available && check.auth !== 'required';
   const canList = provider === 'opencode' || check?.supports_models;
   const manual = manualModels[provider] ?? !list?.models.length;
-  const update = (field: 'path' | 'model', value: string) => {
+  const update = (field: 'path' | 'model', value: string, debounce = false) => {
     if (field === 'model') setTouchedModels(prev => ({ ...prev, [key]: true }));
-    onChange({ ...config, llm_cli: { ...config.llm_cli, [provider]: { ...options, [field]: value } } });
+    onChange({ ...config, llm_cli: { ...config.llm_cli, [provider]: { ...options, [field]: value } } }, debounce);
   };
   const act = async (action: 'check' | 'models' | 'test') => {
     const requestKey = key, requestIdentity = identity;
@@ -98,7 +98,7 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
       </button>
       {(manualPath || options.path) && <div className="space-y-1.5">
         <label htmlFor="cli-path" className="text-neutral-300">Полный путь к CLI</label>
-        <input id="cli-path" value={options.path || ''} onChange={event => update('path', event.target.value)} placeholder="/opt/homebrew/bin/codex"
+        <input id="cli-path" value={options.path || ''} onChange={event => update('path', event.target.value, true)} placeholder="/opt/homebrew/bin/codex"
           className={`${input} font-mono`} aria-invalid={!!pathError} aria-describedby="cli-path-hint cli-path-error" />
       </div>}
       <p id="cli-path-hint" className="text-[11px] text-neutral-500">Пустой путь — найти автоматически. Нужен исполняемый файл, а не команда shell.</p>
@@ -114,12 +114,12 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
         {!!list?.models.length && <button type="button" className={button} onClick={() => setManualModels(prev => ({ ...prev, [provider]: !manual }))}>{manual ? 'Из списка' : 'Ввести вручную'}</button>}
       </div>
       {stale && <p className="text-[11px] text-neutral-400">Список мог устареть — обновите</p>}
-      {manual ? <input id="cli-model" value={options.model || ''} onChange={event => update('model', event.target.value)}
+      {manual ? <input id="cli-model" value={options.model || ''} onChange={event => update('model', event.target.value, true)}
         className={`${input} font-mono`} placeholder={provider === 'opencode' ? 'провайдер/модель#variant' : 'Модель по умолчанию из настроек CLI'}
         onBlur={() => setTouchedModels(prev => ({ ...prev, [key]: true }))} aria-invalid={!!modelError} aria-describedby="cli-model-hint cli-model-error" /> :
         <select id="cli-model" className={input} value={options.model || ''} onChange={event => update('model', event.target.value)} onBlur={() => setTouchedModels(prev => ({ ...prev, [key]: true }))} aria-describedby="cli-model-hint cli-model-error" aria-invalid={!!modelError}>
           <option value="">{provider === 'opencode' ? 'Выберите модель' : 'Модель по умолчанию из настроек CLI'}</option>
-          {savedModelVisibility === 'missing' && <option value={options.model}>{options.model} (сохранённая, нет в последнем списке)</option>}
+          {savedModelVisibility === 'missing' && <option value={options.model}>{options.model} (текущая, нет в последнем списке)</option>}
           {savedModelVisibility === 'filtered' && <option value={options.model}>{options.model} (скрыта фильтром «бесплатные»)</option>}
           {groupNames.map(group => <optgroup key={group} label={group}>{visibleModels.filter(model => (model.provider || provider) === group).map(model => <option key={model.id} value={model.id}>{model.name || model.id}{model.free === true ? ' · бесплатно' : ''}</option>)}</optgroup>)}
         </select>}
@@ -142,7 +142,7 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
       </div>
       {!check && <p className="text-[11px] text-neutral-400">Сначала нажмите «Проверить CLI».</p>}
       {check?.auth === 'required' && <p className="text-[11px] text-neutral-400">Выполните вход в CLI, затем повторите проверку.</p>}
-      <p className="text-[11px] text-neutral-500">«Проверить CLI» не отправляет запрос модели и ничего не сохраняет. «Тестовый запрос» отправит один короткий запрос выбранной модели; у платных моделей он тарифицируется. Настройки и ответ теста не сохраняются.</p>
+      <p className="text-[11px] text-neutral-500">Изменения настроек сохраняются автоматически. «Проверить CLI» проверяет текущий путь без запроса модели. «Тестовый запрос» отправляет один короткий запрос текущей модели; у платных моделей он тарифицируется. Проверки не меняют настройки, ответ теста не сохраняется.</p>
       {check?.available && check.auth === 'unknown' && <p className="text-[11px] text-neutral-400">CLI не сообщает статус входа. Тестовый запрос проверит доступ к выбранной модели.</p>}
       <p className="text-[11px] text-neutral-400">При ошибке CLI генерация остановится — автоматического переключения на другой провайдер нет.</p>
       <div aria-live="polite" aria-atomic="true" className="text-[11px] text-neutral-300 space-y-1 break-words">

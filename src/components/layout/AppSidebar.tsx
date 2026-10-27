@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useSyncExternalStore } from "react";
 import {
   FileText,
   Clock,
@@ -11,12 +11,15 @@ import {
   WarningCircle as AlertCircle,
   ChatCircle as MessageSquare,
   CornersIn,
+  ArrowsClockwise,
 } from "@phosphor-icons/react";
 import { SteppeLogo } from "../ui/SteppeIcon";
 import { useMeetingStore } from "../../store/useMeetingStore";
+import { updateTracker } from "../../store/updateStore";
 import { cliModelName, cliStatus } from "../../utils/cliSettings";
 
 export const AppSidebar: React.FC = () => {
+  const updates = useSyncExternalStore(updateTracker.subscribe, updateTracker.getSnapshot);
   const { currentView, setView, systemStatus, checkStatus, meetings, setMiniMode } = useMeetingStore();
 
   useEffect(() => {
@@ -108,6 +111,14 @@ export const AppSidebar: React.FC = () => {
             <Settings className="w-4 h-4 text-neutral-400" />
             <span>Настройки AI</span>
           </button>
+
+          {updates.result?.status === 'available' && <button
+            type="button"
+            onClick={() => setView("settings")}
+            className="w-full flex items-center gap-2.5 px-3.5 py-2 rounded-lg text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-500 text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200">
+            <ArrowsClockwise className="w-4 h-4 text-neutral-400 shrink-0" /><span>Обновления</span>
+            <span className="ml-auto text-xs font-mono">{updates.result.latest_version}</span>
+          </button>}
 
           {/* Mini Mode Quick Action */}
           <button

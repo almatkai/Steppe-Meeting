@@ -169,7 +169,17 @@ export interface SystemStatus {
   whisper: WhisperStatus;
 }
 
+export type UpdateChannel = 'stable' | 'beta';
+export interface ReleaseUpdate {
+  channel: UpdateChannel; repository: string; current_version: string; checked_at: string;
+  status: 'available' | 'up_to_date' | 'no_releases' | 'error';
+  latest_version?: string; tag_name?: string; release_name?: string; published_at?: string;
+  release_url?: string; notes?: string; download_url?: string; asset_name?: string;
+  error?: string; retry_after?: string | number; retry_at?: string;
+}
+
 export interface SystemConfig {
+  update_channel?: UpdateChannel;
   llm_mode: 'api' | 'cli';
   llm_cli_provider: CliProviderId;
   llm_cli: Partial<Record<CliProviderId, CliOptions>>;

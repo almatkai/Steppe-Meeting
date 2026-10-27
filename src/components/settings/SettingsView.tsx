@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   GearSix as Settings,
   Cpu,
@@ -7,9 +7,7 @@ import {
   XCircle,
   WarningCircle as AlertCircle,
   ArrowsClockwise as RefreshCw,
-  FloppyDisk as Save,
   Check,
-  HardDrives as Server,
   Key,
   Eye,
   EyeSlash as EyeOff,
@@ -23,8 +21,11 @@ import {
   Trash as Trash2,
   CircleNotch as Loader2,
 } from "@phosphor-icons/react";
+import { settingsAutosave, loadSettingsConfig } from "../../store/settingsStore";
+import { UpdatesCard } from "./UpdatesCard";
+import { SaveIndicator } from "./SaveIndicator";
 import { CliSettings } from "./CliSettings";
-import { cliCheckKey, cliKey, cliStatus, cliValidation } from "../../utils/cliSettings";
+import { cliCheckKey, cliKey, cliStatus } from "../../utils/cliSettings";
 import { api } from "../../services/api";
 import { useMeetingStore } from "../../store/useMeetingStore";
 import { TemplateManager } from "../templates/TemplateManager";
@@ -118,23 +119,30 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
   },
 ];
 
+const DEFAULT_CONFIG: SystemConfig = {
+  llm_mode: "api",
+  llm_cli_provider: "opencode",
+  llm_cli: {},
+  llm_base_url: "http://localhost:11434/v1",
+  llm_model: "qwen2.5:latest",
+  llm_api_key: "",
+  whisper_mode: "local",
+  whisper_local_model: "small",
+  whisper_device: "auto",
+  whisper_base_url: "http://localhost:8000/v1",
+  whisper_model: "whisper-1",
+  whisper_api_key: "",
+};
+
+const modelEndpointKey = (value: SystemConfig) => JSON.stringify([value.llm_mode, value.llm_base_url.trim(), value.llm_api_key?.trim() || '']);
+
 export const SettingsView: React.FC = () => {
   const { systemStatus, checkStatus } = useMeetingStore();
 
-  const [config, setConfig] = useState<SystemConfig>({
-    llm_mode: "api",
-    llm_cli_provider: "opencode",
-    llm_cli: {},
-    llm_base_url: "http://localhost:11434/v1",
-    llm_model: "qwen2.5:latest",
-    llm_api_key: "",
-    whisper_mode: "local",
-    whisper_local_model: "small",
-    whisper_device: "auto",
-    whisper_base_url: "http://localhost:8000/v1",
-    whisper_model: "whisper-1",
-    whisper_api_key: "",
-  });
+  const autosave = useSyncExternalStore(settingsAutosave.subscribe, settingsAutosave.getSnapshot);
+  const config = autosave.config || DEFAULT_CONFIG;
+  const setConfig = settingsAutosave.change;
+  const settingsLoaded = !!autosave.config;
 
   const [cliChecks, setCliChecks] = useState<Record<string, CliCheckResult>>({});
   useEffect(() => {
@@ -150,17 +158,20 @@ export const SettingsView: React.FC = () => {
   const [loadError, setLoadError] = useState("");
   const [whisperError, setWhisperError] = useState("");
   const [isLoadingWhisper, setIsLoadingWhisper] = useState(true);
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showWhisperApiKey, setShowWhisperApiKey] = useState(false);
   const [whisperDetails, setWhisperDetails] = useState<WhisperStatus | null>(null);
   const [isInstallingEnv, setIsInstallingEnv] = useState(false);
   const [isDownloadingModel, setIsDownloadingModel] = useState<string | null>(null);
   const [manualModelInput, setManualModelInput] = useState(false);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [modelList, setModelList] = useState<{ endpoint: string; models: string[] }>({ endpoint: '', models: [] });
+  const [loadingModelsKey, setLoadingModelsKey] = useState('');
+  const [modelLoadError, setModelLoadError] = useState({ endpoint: '', message: '' });
+  const modelRequest = useRef(0);
+  const endpointKey = modelEndpointKey(config);
+  const availableModels = modelList.endpoint === endpointKey ? modelList.models : [];
+  const isLoadingModels = loadingModelsKey === endpointKey;
+  const modelsError = modelLoadError.endpoint === endpointKey ? modelLoadError.message : '';
   const [modelToDelete, setModelToDelete] = useState<string | null>(null);
 
   const localStatus = whisperDetails?.local || systemStatus?.whisper?.local;
@@ -170,25 +181,21 @@ export const SettingsView: React.FC = () => {
   const selectedLocalReady = selectedEnvInstalled && selectedLocalModel?.downloaded;
 
   useEffect(() => {
-    loadSettings();
+    void loadSettings();
+    return () => settingsAutosave.flush();
+  }, []);
+
+  useEffect(() => {
+    const refreshSharedConfig = () => { void loadSettingsConfig().catch(error => setLoadError(error instanceof Error ? error.message : String(error))); };
+    window.addEventListener('focus', refreshSharedConfig);
+    return () => window.removeEventListener('focus', refreshSharedConfig);
   }, []);
 
   const loadSettings = async () => {
     setLoadError("");
     try {
-      const cfg = await api.getConfig();
-      setConfig((prev) => ({
-        ...prev,
-        ...cfg,
-        llm_mode: cfg.llm_mode || "api",
-        llm_cli_provider: cfg.llm_cli_provider || "opencode",
-        llm_cli: cfg.llm_cli || {},
-        whisper_mode: cfg.whisper_mode || "local",
-        whisper_local_model: cfg.whisper_local_model || "small",
-        whisper_device: cfg.whisper_device || "auto",
-      }));
-      if ((cfg.llm_mode || "api") === "api") void fetchModels();
-      setSettingsLoaded(true);
+      await loadSettingsConfig();
+      if (settingsAutosave.getSnapshot().config?.llm_mode === "api") void fetchModels();
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }
@@ -243,14 +250,24 @@ export const SettingsView: React.FC = () => {
   }, [whisperDetails, isInstallingEnv, isDownloadingModel]);
 
   const fetchModels = async () => {
+    const current = settingsAutosave.getSnapshot().config;
+    if (!current || current.llm_mode !== 'api') return;
+    const endpoint = modelEndpointKey(current);
+    const request = ++modelRequest.current;
+    const stillCurrent = () => request === modelRequest.current && endpoint === modelEndpointKey(settingsAutosave.getSnapshot().config!);
+    setLoadingModelsKey(endpoint);
+    setModelLoadError({ endpoint, message: '' });
     try {
-      setIsLoadingModels(true);
-      const models = await api.listModels();
-      setAvailableModels(models);
-    } catch (e) {
-      console.error("Failed to fetch models", e);
+      let url: URL;
+      try { url = new URL(current.llm_base_url.trim()); }
+      catch { throw new Error('Укажите полный HTTP или HTTPS URL провайдера'); }
+      if (!['http:', 'https:'].includes(url.protocol) || !url.hostname) throw new Error('Укажите полный HTTP или HTTPS URL провайдера');
+      const models = await api.listModels({ base_url: current.llm_base_url.trim(), api_key: current.llm_api_key || '' });
+      if (stillCurrent()) setModelList({ endpoint, models });
+    } catch (error) {
+      if (stillCurrent()) setModelLoadError({ endpoint, message: error instanceof Error ? error.message : String(error) });
     } finally {
-      setIsLoadingModels(false);
+      if (request === modelRequest.current) setLoadingModelsKey('');
     }
   };
 
@@ -296,31 +313,21 @@ export const SettingsView: React.FC = () => {
     setModelToDelete(modelId);
   };
 
-  const handleSave = async () => {
-    if (cliValidation(config)) return;
-    try {
-      setIsSaving(true);
-      await api.saveConfig(config);
-      await checkStatus();
-      if (config.llm_mode === "api") await fetchModels();
-      await fetchWhisperStatus();
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2500);
-    } catch (e: any) {
-      alert("Не удалось сохранить настройки: " + e.message);
-    } finally {
-      setIsSaving(false);
-    }
-  };
+  useEffect(() => {
+    if (!autosave.saveRevision) return;
+    const timer = setTimeout(() => { void checkStatus(); }, 800);
+    return () => clearTimeout(timer);
+  }, [autosave.saveRevision, checkStatus]);
 
   const activeCliCheck = cliChecks[cliKey(config)];
-  const cliError = cliValidation(config);
   const ollamaOk = systemStatus?.ollama?.connected;
   const ollamaErr = systemStatus?.ollama?.error;
-  const whisperOk = systemStatus?.whisper?.connected;
+  const localSelectionText = autosave.stt.status === 'error' ? 'Выбор не сохранён'
+    : autosave.stt.status === 'pending' || autosave.stt.status === 'saving' ? 'Сохраняем выбор…'
+    : 'Выбрана для следующей записи';
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-8">
+    <div className="settings-view max-w-5xl mx-auto p-6 space-y-8">
       <div>
         <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
           <Settings className="w-5 h-5 text-neutral-300" />
@@ -338,7 +345,9 @@ export const SettingsView: React.FC = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <UpdatesCard />
+      <p className="text-[11px] text-neutral-400">Изменения сохраняются автоматически. Незавершённые поля остаются в черновике до исправления.</p>
+      <fieldset disabled={!settingsLoaded} onBlurCapture={() => settingsAutosave.flush()} className="grid grid-cols-1 md:grid-cols-2 gap-6 min-w-0 disabled:opacity-60">
         {/* LLM Provider Section */}
         <div className="p-6 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-5">
           <div className="flex items-center justify-between">
@@ -374,6 +383,7 @@ export const SettingsView: React.FC = () => {
             )}
           </div>
 
+          <SaveIndicator state={autosave.llm} onRetry={() => settingsAutosave.retry('llm')} label="LLM" />
           <div role="radiogroup" aria-label="Способ генерации" className="cli-settings grid grid-cols-2 p-1 rounded-xl bg-neutral-950 border border-neutral-800">
             {([['api', 'API (HTTP)', Globe], ['cli', 'Локальный CLI', Terminal]] as const).map(([mode, label, Icon]) => (
               <label key={mode} className={`min-h-9 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs cursor-pointer ${config.llm_mode === mode ? 'bg-white text-neutral-950 font-semibold shadow-sm' : 'text-neutral-400 hover:text-white hover:bg-neutral-800/50'}`}>
@@ -431,8 +441,10 @@ export const SettingsView: React.FC = () => {
               <label className="text-neutral-300 font-medium">Эндпоинт LLM (URL провайдера)</label>
               <input
                 type="text"
+                aria-invalid={autosave.llm.validation.includes("URL")}
+                aria-describedby="llm-save-status"
                 value={config.llm_base_url}
-                onChange={(e) => setConfig({ ...config, llm_base_url: e.target.value })}
+                onChange={(e) => setConfig({ ...config, llm_base_url: e.target.value }, true)}
                 placeholder="http://localhost:11434/v1"
                 className="w-full py-2 px-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono text-xs focus:outline-none focus:border-neutral-500"
               />
@@ -454,7 +466,7 @@ export const SettingsView: React.FC = () => {
                 <input
                   type={showApiKey ? "text" : "password"}
                   value={config.llm_api_key || ""}
-                  onChange={(e) => setConfig({ ...config, llm_api_key: e.target.value })}
+                  onChange={(e) => setConfig({ ...config, llm_api_key: e.target.value }, true)}
                   placeholder="sk-... или Bearer токен (пусто для локальной Ollama)"
                   className="w-full py-2 px-3 pr-10 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono text-xs focus:outline-none focus:border-neutral-500 placeholder-neutral-600"
                 />
@@ -499,7 +511,7 @@ export const SettingsView: React.FC = () => {
                   <button
                     type="button"
                     onClick={fetchModels}
-                    disabled={isLoadingModels}
+                    disabled={isLoadingModels || !!autosave.llm.validation || autosave.llm.status === "error"}
                     className="flex items-center gap-1 text-[11px] text-neutral-300 hover:text-white"
                   >
                     <RefreshCw className={`w-3 h-3 ${isLoadingModels ? "animate-spin" : ""}`} />
@@ -508,8 +520,10 @@ export const SettingsView: React.FC = () => {
                 </div>
               </div>
 
+              {modelsError && <p role="alert" className="text-[11px] text-neutral-300">Не удалось загрузить модели: {modelsError}</p>}
               {!manualModelInput && availableModels.length > 0 ? (
                 <select
+                  aria-invalid={autosave.llm.validation.includes("модель")} aria-describedby="llm-save-status"
                   value={config.llm_model}
                   onChange={(e) => setConfig({ ...config, llm_model: e.target.value })}
                   className="w-full py-2 px-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono text-xs focus:outline-none focus:border-neutral-500"
@@ -526,8 +540,9 @@ export const SettingsView: React.FC = () => {
               ) : (
                 <input
                   type="text"
+                  aria-invalid={autosave.llm.validation.includes("модель")} aria-describedby="llm-save-status"
                   value={config.llm_model}
-                  onChange={(e) => setConfig({ ...config, llm_model: e.target.value })}
+                  onChange={(e) => setConfig({ ...config, llm_model: e.target.value }, true)}
                   placeholder="qwen2.5:latest, gpt-4o-mini, llama-3.3-70b..."
                   className="w-full py-2 px-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono text-xs focus:outline-none focus:border-neutral-500"
                 />
@@ -582,6 +597,8 @@ export const SettingsView: React.FC = () => {
               </span>
             )}
           </div>
+
+          <SaveIndicator state={autosave.stt} onRetry={() => settingsAutosave.retry('stt')} label="Распознавание" />
 
           {/* Mode Switcher */}
           <div className="grid grid-cols-2 p-1 rounded-xl bg-neutral-950 border border-neutral-800 gap-1">
@@ -684,7 +701,7 @@ export const SettingsView: React.FC = () => {
                   </span>
                 </div>
 
-                <p className="text-[11px] text-neutral-400 mb-3">В Mini одна выбранная модель распознаёт речь во время записи. После остановки готовый транскрипт отправляется на обработку. Сохраните выбор — он применится к следующей записи.</p>
+                <p className="text-[11px] text-neutral-400 mb-3">В Mini одна выбранная модель распознаёт речь во время записи. После остановки готовый транскрипт отправляется на обработку. Выбор сохраняется автоматически и применяется к следующей записи.</p>
                 <div className="space-y-2">
                   {whisperError ? (
                     <div role="alert" className="text-neutral-300 space-y-2">
@@ -740,7 +757,7 @@ export const SettingsView: React.FC = () => {
                               <>
                                 <span className="text-[11px] text-emerald-300 font-medium flex items-center gap-1.5 shrink-0 whitespace-nowrap">
                                   <Check className="w-3 h-3 text-emerald-400 shrink-0" />
-                                  <span>{m.env_installed ? (whisperDetails?.local?.selected_model === m.id ? "Выбрана для работы" : "Выбрана — сохраните настройки") : "Скачана — установите среду"}</span>
+                                  <span>{m.env_installed ? (whisperDetails?.local?.selected_model === m.id ? "Выбрана для работы" : localSelectionText) : "Скачана — установите среду"}</span>
                                 </span>
                                 <button
                                   type="button"
@@ -842,8 +859,10 @@ export const SettingsView: React.FC = () => {
                 <label className="text-neutral-300 font-medium">Эндпоинт Whisper Сервера</label>
                 <input
                   type="text"
+                  aria-invalid={autosave.stt.validation.includes("URL")}
+                  aria-describedby="stt-save-status"
                   value={config.whisper_base_url}
-                  onChange={(e) => setConfig({ ...config, whisper_base_url: e.target.value })}
+                  onChange={(e) => setConfig({ ...config, whisper_base_url: e.target.value }, true)}
                   placeholder="https://api.groq.com/openai/v1 или http://localhost:8000/v1"
                   className="w-full py-2 px-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono text-xs focus:outline-none focus:border-neutral-500"
                 />
@@ -865,7 +884,7 @@ export const SettingsView: React.FC = () => {
                   <input
                     type={showWhisperApiKey ? "text" : "password"}
                     value={config.whisper_api_key || ""}
-                    onChange={(e) => setConfig({ ...config, whisper_api_key: e.target.value })}
+                    onChange={(e) => setConfig({ ...config, whisper_api_key: e.target.value }, true)}
                     placeholder="gsk_... / sk-... (для локального сервера оставьте пустым)"
                     className="w-full py-2 pl-3 pr-10 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono text-xs focus:outline-none focus:border-neutral-500 placeholder-neutral-600"
                   />
@@ -887,8 +906,9 @@ export const SettingsView: React.FC = () => {
                 <label className="text-neutral-300 font-medium">Модель Whisper</label>
                 <input
                   type="text"
+                  aria-invalid={autosave.stt.validation.includes("модель")} aria-describedby="stt-save-status"
                   value={config.whisper_model}
-                  onChange={(e) => setConfig({ ...config, whisper_model: e.target.value })}
+                  onChange={(e) => setConfig({ ...config, whisper_model: e.target.value }, true)}
                   placeholder="whisper-large-v3, whisper-1..."
                   className="w-full py-2 px-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono text-xs focus:outline-none focus:border-neutral-500"
                 />
@@ -899,37 +919,10 @@ export const SettingsView: React.FC = () => {
             </div>
           )}
         </div>
-      </div>
+      </fieldset>
 
       {/* Protocol Templates Section */}
       <TemplateManager />
-
-      {/* Save Action Bar */}
-      <div className="flex items-center justify-between p-4 rounded-xl bg-neutral-900 border border-neutral-800">
-        <div className="flex items-center gap-2 text-xs text-neutral-400">
-          <Server className="w-4 h-4 text-neutral-300" />
-          <span>Локальный сервер: 127.0.0.1:8008</span>
-        </div>
-
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={isSaving || !settingsLoaded || !!cliError}
-          className="flex items-center gap-2 py-2.5 px-6 rounded-xl bg-white hover:bg-neutral-200 text-neutral-950 text-xs font-semibold transition-all shadow-md  active:scale-95 disabled:opacity-50"
-        >
-          {saveSuccess ? (
-            <>
-              <Check className="w-4 h-4 text-emerald-300" />
-              <span>Сохранено!</span>
-            </>
-          ) : (
-            <>
-              <Save className="w-4 h-4" />
-              <span>{isSaving ? "Сохранение..." : "Сохранить настройки"}</span>
-            </>
-          )}
-        </button>
-      </div>
 
       {/* Delete Model Confirmation Modal */}
       {modelToDelete && (

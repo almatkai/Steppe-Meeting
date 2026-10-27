@@ -2,6 +2,23 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
   "description": "Receive the saved recording's meeting ID from the native mini window.",
-  "windows": ["main"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:app:allow-version",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://github.com/almatkai/Steppe-Meeting/releases"
+        },
+        {
+          "url": "https://github.com/almatkai/Steppe-Meeting/releases/tag/*"
+        }
+      ]
+    }
+  ]
 }
