@@ -158,7 +158,7 @@ def workspace(provider: str):
 
 def command(provider, binary, model=''):
     if provider == 'opencode':
-        args = opencode_proxy.command(binary, model)
+        raise ValueError('OpenCode requests use opencode_proxy.request')
     elif provider == 'codex':
         args = [binary, '-a', 'never', 'exec', '--sandbox', 'read-only', '--skip-git-repo-check',
                 '--ephemeral', '--json', '--color', 'never',
@@ -261,7 +261,10 @@ async def complete(provider, path, model, messages, *, json_mode=False, timeout=
     if provider == 'antigravity':
         text = json.dumps({'event': 'user', 'message': {'content': text}}, ensure_ascii=False) + '\n'
     if provider == 'opencode':
-        code, stdout, _ = await opencode_proxy.request(binary, model, text, run=run, timeout=timeout)
+        try:
+            code, stdout, _ = await opencode_proxy.request(binary, model, text, timeout=timeout)
+        except opencode_proxy.ProxyError as error:
+            raise CLIError(str(error)) from None
     else:
         with workspace(provider) as (folder, env):
             code, stdout, _ = await run(command(provider, binary, model), cwd=folder, env=env, stdin=text, timeout=timeout)

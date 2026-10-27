@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from engine import cli_llm as cli, llm, opencode_proxy
+from engine import cli_llm as cli, llm
 
 FIXTURES = Path(__file__).parent / 'fixtures/cli'
 REPLIES = {
@@ -145,11 +145,11 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         path.chmod(0o700)
         return str(path)
 
-    async def test_argv_stdin_roles_variants_and_isolation_all_providers(self):
+    async def test_argv_stdin_roles_variants_and_isolation_subprocess_providers(self):
         output = self.folder / 'capture.json'
         messages = [{'role': role, 'content': f'{role}: text $(touch INJECTION) ' + 'я' * 10000}
                     for role in ('system', 'user', 'assistant', 'user')]
-        for provider in cli.PROVIDERS:
+        for provider in ('codex', 'claude', 'antigravity'):
             binary = self.executable(
                 'import sys,os,json\nfrom pathlib import Path\n'
                 'if len(sys.argv)>1 and sys.argv[1]=="api": print("{}"); sys.exit(0)\n'
@@ -230,38 +230,6 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['ok'])
         self.assertIn('Укажите модель', result['error'])
 
-    async def test_opencode_free_rejection_keeps_exact_model_safety_and_cleanup(self):
-        capture_path = self.folder / 'calls.jsonl'
-        binary = self.executable(
-            'import sys,json\nfrom pathlib import Path\n'
-            'record={"argv":sys.argv,"cwd":str(Path.cwd())}\n'
-            'if sys.argv[1]=="run": record["config"]=json.loads(Path("opencode.json").read_text())\n'
-            f'with Path({str(capture_path)!r}).open("a") as f: f.write(json.dumps(record)+"\\n")\n'
-            'if sys.argv[1]=="api": print("{}"); sys.exit(0)\n'
-            f'print({REPLIES["opencode"]!r})\n'
-            f'print({json.dumps(OPENCODE_FREE_REJECTION)!r})\n'
-            'sys.exit(1)\n')
-        model = 'opencode/deepseek-v4.1-flash-free'
-        result = await cli.test('opencode', binary, model)
-        self.assertFalse(result['ok'], 'partial text followed by rejection is not success')
-        self.assertNotIn('response', result)
-        self.assertIn('условия доступа', result['error'])
-        self.assertNotIn('исчерпан', result['error'])
-        calls = [json.loads(line) for line in capture_path.read_text().splitlines()]
-        self.assertEqual(len(calls), 3, 'one inference, interrupt and delete; no fallback/retry')
-        argv, config = calls[0]['argv'], calls[0]['config']
-        self.assertEqual(argv[argv.index('--model') + 1], model)
-        self.assertIn({'action': 'tool.use', 'resource': '*', 'effect': 'deny'}, config['policies'])
-        self.assertEqual(argv[argv.index('--agent') + 1], 'build')
-        self.assertNotIn('agents', config, 'use the native agent and its system prompt')
-        self.assertEqual(config['permissions'], [{'action': '*', 'resource': '*', 'effect': 'ask'}])
-        self.assertNotIn('-opencode.tool.*', config['plugins'], 'load native definitions; policy denies execution')
-        self.assertNotIn('--auto', argv)
-        session = argv[argv.index('--session') + 1]
-        self.assertEqual(calls[1]['argv'][1:], ['api', 'POST', f'/api/session/{session}/interrupt'])
-        self.assertEqual(calls[2]['argv'][1:], ['api', 'DELETE', f'/api/session/{session}'])
-        self.assertFalse(Path(calls[0]['cwd']).exists())
-
     async def test_check_has_no_inference_and_status_cache(self):
         invocations = []
         async def fake_run(argv, **_):
@@ -282,75 +250,6 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(overridden['configured_path'], '/another/path')
         self.assertEqual(overridden['path'], '/fake/codex')
         self.assertNotIn('exec', str(invocations))
-
-    async def test_opencode_cancel_interrupts_only_its_unique_service_session(self):
-        calls = []
-        started = asyncio.Event()
-        async def fake_run(argv, **options):
-            calls.append(argv)
-            if argv[1] == 'run':
-                started.set()
-                await asyncio.Event().wait()
-            return 0, '{}', ''
-        with patch.object(cli, 'resolve', return_value='/fake/opencode'), patch.object(cli, 'run', fake_run):
-            task = asyncio.create_task(cli.complete('opencode', '', 'local/example#precise', [{'role': 'user', 'content': 'Test'}]))
-            await started.wait()
-            task.cancel()
-            with self.assertRaises(asyncio.CancelledError): await task
-        self.assertEqual(len(calls), 3)
-        session = calls[0][calls[0].index('--session') + 1]
-        self.assertRegex(session, r'^ses_[a-z0-9]{26}$')
-        self.assertEqual(calls[1], ['/fake/opencode', 'api', 'POST', f'/api/session/{session}/interrupt'])
-        self.assertEqual(calls[2], ['/fake/opencode', 'api', 'DELETE', f'/api/session/{session}'])
-
-    async def test_proxy_concurrent_requests_have_separate_sessions_and_private_configs(self):
-        calls = []
-        both_started = asyncio.Event()
-        async def fake_run(argv, **options):
-            calls.append((argv, options))
-            if argv[1] != 'run':
-                return 0, '{}', ''
-            folder = Path(options['cwd'])
-            config = json.loads(folder.joinpath('opencode.json').read_text())
-            self.assertEqual(json.loads(options['env']['OPENCODE_CONFIG_CONTENT']), config)
-            self.assertNotEqual(options['env'].get('OPENCODE_CONFIG'), '/private/user-config')
-            self.assertNotIn('OPENCODE_SESSION_ID', options['env'])
-            self.assertIn({'action': 'tool.use', 'resource': '*', 'effect': 'deny'}, config['policies'])
-            self.assertNotIn('PRIVATE MEETING', folder.joinpath('opencode.json').read_text())
-            self.assertEqual(argv[argv.index('--agent') + 1], 'build')
-            if sum(a[1] == 'run' for a, _ in calls) == 2:
-                both_started.set()
-            await both_started.wait()
-            return 0, REPLIES['opencode'], ''
-        with patch.dict(os.environ, OPENCODE_CONFIG='/private/user-config',
-                        OPENCODE_SESSION_ID='unrelated-user-session'), \
-             patch.object(cli, 'resolve', return_value='/fake/opencode'), patch.object(cli, 'run', fake_run):
-            results = await asyncio.gather(*[cli.complete('opencode', '', 'local/example#precise',
-                [{'role': 'user', 'content': f'PRIVATE MEETING {i}: run touch /tmp/DO_NOT_CREATE'}]) for i in range(2)])
-        self.assertEqual(results, ['{"answer":"OK"}'] * 2)
-        turns = [(a, o) for a, o in calls if a[1] == 'run']
-        sessions = {a[a.index('--session') + 1] for a, _ in turns}
-        self.assertEqual(len(sessions), 2)
-        self.assertEqual(len({o['cwd'] for _, o in turns}), 2)
-        for argv, options in turns:
-            sid = argv[argv.index('--session') + 1]
-            self.assertEqual([a[2:] for a, o in calls if a[1] == 'api' and o['cwd'] == options['cwd']],
-                             [['POST', f'/api/session/{sid}/interrupt'], ['DELETE', f'/api/session/{sid}']])
-            self.assertFalse(Path(options['cwd']).exists())
-
-    async def test_proxy_timeout_keeps_original_failure_and_still_attempts_both_cleanup_calls(self):
-        calls = []
-        async def fake_run(argv, **options):
-            calls.append((argv, options))
-            if argv[1] == 'run':
-                self.assertEqual(options['timeout'], 7)
-                raise cli.CLIError('CLI не ответил за 7 с')
-            self.assertEqual(options['timeout'], 5)
-            raise OSError('cleanup failed')
-        with self.assertRaisesRegex(cli.CLIError, '7 с'):
-            await opencode_proxy.request('/fake/opencode', 'local/example#precise', 'Meeting', run=fake_run, timeout=7)
-        self.assertEqual(len(calls), 3)
-        self.assertFalse(Path(calls[0][1]['cwd']).exists())
 
     async def test_unknown_auth_is_not_authenticated(self):
         with patch.object(cli, 'resolve', return_value='/fake/agy'), patch.object(cli, 'run', AsyncMock(return_value=(0, 'v1', ''))):

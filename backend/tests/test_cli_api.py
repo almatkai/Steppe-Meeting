@@ -97,14 +97,12 @@ class CLIAPITests(unittest.TestCase):
             'message': 'PRIVATE TRANSCRIPT',
             'response': {'body': json.dumps({'error': {'type': 'FreeUsageLimitError', 'message': 'PRIVATE TRANSCRIPT'}})},
         }})
-        async def fake_run(argv, **options):
-            if argv[1] == 'run':
-                self.assertEqual(argv[argv.index('--model') + 1], model)
-                self.assertIn('Reply with OK only.', options['stdin'])
-                return 1, refusal, 'PRIVATE TRANSCRIPT'
-            return 0, '{}', ''
+        async def fake_proxy(binary, selected, text, **options):
+            self.assertEqual(selected, model)
+            self.assertIn('Reply with OK only.', text)
+            return 1, refusal, ''
         with patch.object(cli_llm, 'resolve', return_value='/fake/opencode'), \
-             patch.object(cli_llm, 'run', AsyncMock(side_effect=fake_run)) as run:
+             patch.object(opencode_proxy, 'request', AsyncMock(side_effect=fake_proxy)) as proxy:
             response = self.client.post('/api/v1/system/cli/test', json={'provider': 'opencode', 'model': model})
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -112,7 +110,7 @@ class CLIAPITests(unittest.TestCase):
         self.assertIn('условия доступа', body['error'])
         self.assertNotIn('исчерпан', body['error'])
         self.assertNotIn('PRIVATE', response.text)
-        self.assertEqual(run.await_count, 3, 'one inference plus interrupt/delete')
+        self.assertEqual(proxy.await_count, 1, 'one inference, no fallback/retry')
         self.assertEqual(self.client.get('/api/v1/system/config').json(), before)
 
     def test_cli_status_never_contacts_http_llm_and_retains_legacy_shape(self):
@@ -205,7 +203,7 @@ class CLIAPITests(unittest.TestCase):
             for call in proxy.await_args_list:
                 self.assertEqual(call.args[:2], ('/fake/opencode', 'local/example#precise'))
                 self.assertIn('Conversation messages (ordered JSON):', call.args[2])
-                self.assertIs(call.kwargs['run'], cli_llm.run)
+                self.assertGreater(call.kwargs['timeout'], 0)
 
     def test_direct_api_chat_keeps_selected_http_provider_without_fallback(self):
         async def fail_selected(*args, **kwargs):
