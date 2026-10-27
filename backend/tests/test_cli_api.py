@@ -89,6 +89,32 @@ class CLIAPITests(unittest.TestCase):
                 call.assert_awaited_once_with(*body.values())
             self.assertEqual(self.client.get('/api/v1/system/config').json(), before)
 
+    def test_free_tier_refusal_reaches_test_api_without_fallback_or_settings_changes(self):
+        before = self.client.get('/api/v1/system/config').json()
+        model = 'opencode/deepseek-v4.1-flash-free'
+        refusal = json.dumps({'type': 'error', 'error': {
+            'type': 'provider.free-limit', 'status': 429,
+            'message': 'PRIVATE TRANSCRIPT',
+            'response': {'body': json.dumps({'error': {'type': 'FreeUsageLimitError', 'message': 'PRIVATE TRANSCRIPT'}})},
+        }})
+        async def fake_run(argv, **options):
+            if argv[1] == 'run':
+                self.assertEqual(argv[argv.index('--model') + 1], model)
+                self.assertIn('Reply with OK only.', options['stdin'])
+                return 1, refusal, 'PRIVATE TRANSCRIPT'
+            return 0, '{}', ''
+        with patch.object(cli_llm, 'resolve', return_value='/fake/opencode'), \
+             patch.object(cli_llm, 'run', AsyncMock(side_effect=fake_run)) as run:
+            response = self.client.post('/api/v1/system/cli/test', json={'provider': 'opencode', 'model': model})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body['ok'])
+        self.assertIn('условия доступа', body['error'])
+        self.assertNotIn('исчерпан', body['error'])
+        self.assertNotIn('PRIVATE', response.text)
+        self.assertEqual(run.await_count, 3, 'one inference plus interrupt/delete')
+        self.assertEqual(self.client.get('/api/v1/system/config').json(), before)
+
     def test_cli_status_never_contacts_http_llm_and_retains_legacy_shape(self):
         self.activate('codex')
         check = {'provider': 'codex', 'available': True, 'auth': 'authenticated', 'supports_models': False, 'checked_at': '2026-10-27T00:00:00Z'}

@@ -204,6 +204,33 @@ def prompt(messages, json_mode):
             + '\nConversation messages (ordered JSON):\n' + json.dumps(messages, ensure_ascii=False))
 
 
+def _opencode_failure(error):
+    """Use safe categories, not provider prose that may echo private input.
+
+    OpenCode 2.2.0 replaces FreeUsageLimitError with provider.free-limit and
+    generic quota copy. The retained body can also mention client eligibility;
+    neither this envelope nor zero prices prove account-wide exhaustion.
+    Newer versions can expose the same body as provider.quota/provider.auth.
+    """
+    body_type = None
+    response = error.get('response')
+    if isinstance(response, dict) and isinstance(response.get('body'), str):
+        try:
+            body = json.loads(response['body'])
+            detail = body.get('error') if isinstance(body, dict) else None
+            if isinstance(detail, dict):
+                body_type = detail.get('type')
+        except ValueError:
+            pass
+    if error.get('type') == 'provider.free-limit' or body_type in ('FreeUsageLimitError', 'FreeTierError'):
+        status = error.get('status')
+        status_text = f' ({status})' if type(status) is int and 400 <= status <= 599 else ''
+        return (f'OpenCode отклонил запрос к бесплатной модели{status_text}. '
+                'Проверьте лимиты и условия доступа free tier. Состояние квоты аккаунта не подтверждено. '
+                'Другая модель не выбрана.')
+    return 'OpenCode не завершил запрос; проверьте вход, лимиты и выбранную модель'
+
+
 def parse_reply(provider: str, stdout: str) -> str:
     try:
         if provider == 'claude':
@@ -223,10 +250,7 @@ def parse_reply(provider: str, stdout: str) -> str:
                         parts.append(item.get('text', ''))
                 elif provider == 'opencode':
                     if event.get('type') == 'error':
-                        error_type = (event.get('error') or {}).get('type')
-                        if error_type == 'provider.free-limit':
-                            raise CLIError('OpenCode: исчерпан бесплатный лимит провайдера (429). Генерация остановлена; другая модель не выбрана.')
-                        raise CLIError('OpenCode не завершил запрос; проверьте вход, лимиты и выбранную модель')
+                        raise CLIError(_opencode_failure(event.get('error') or {}))
                     if event.get('type') == 'text':
                         parts.append((event.get('part') or {}).get('text', ''))
                 elif event.get('event') == 'result':
@@ -342,9 +366,9 @@ async def models(provider, path=''):
         binary = resolve(provider, path)
         if provider not in ('opencode', 'antigravity'):
             return {**result, 'error': 'Этот CLI не поддерживает список моделей. Введите модель вручную или оставьте по умолчанию.'}
-        # Metadata commands use the CLI's own configured service, with no model
-        # request. v2.1.4's standalone location activation fails on some machines.
-        # Generation uses a unique temporary location with denied tool access.
+        # Metadata uses the CLI's configured service, with no model request.
+        # Generation uses the same official `run` path in a unique temporary
+        # location with denied tool access; Desktop success is not an access probe.
         async with asyncio.timeout(DISCOVERY_TIMEOUT):
             with workspace(provider) as (folder, env):
                 code, out, err = await run([binary, 'models'], cwd=folder, env=env)

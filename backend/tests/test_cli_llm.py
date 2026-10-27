@@ -30,6 +30,20 @@ REPLIES = {
     ])),
 }
 
+# Minimal OpenCode 2.2.0 envelope observed for our isolated, tiny free-model
+# request. OpenCode replaces the provider's message but retains response.body.
+OPENCODE_FREE_REJECTION = {
+    'type': 'error',
+    'error': {
+        'type': 'provider.free-limit', 'status': 429,
+        'message': 'Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.',
+        'response': {'body': json.dumps({'type': 'error', 'error': {
+            'type': 'FreeUsageLimitError',
+            'message': 'Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode Go to keep going: https://opencode.ai/go',
+        }})},
+    },
+}
+
 
 class ParserTests(unittest.TestCase):
     def test_assistant_only_all_providers_and_object_guarantee(self):
@@ -77,6 +91,44 @@ class ParserTests(unittest.TestCase):
         for secret in ('topsecret', 'abcd', 'sk-xxx', 'eyJxxx'):
             self.assertNotIn(secret, result)
         self.assertLessEqual(len(result), 2048)
+
+    def test_opencode_free_refusal_is_not_proof_of_exhausted_account_quota(self):
+        # Known free-limit category, including older CLI envelopes without a
+        # body, must not invent account-wide exhaustion or an HTTP status.
+        for response in (OPENCODE_FREE_REJECTION['error']['response'], None,
+                         {'body': 'malformed PRIVATE TRANSCRIPT sk-secret'}):
+            for status in (429, None, 'PRIVATE TRANSCRIPT'):
+                error = {'type': 'provider.free-limit', 'status': status,
+                         'message': 'PRIVATE TRANSCRIPT', 'response': response}
+                with self.subTest(response=response, status=status), self.assertRaises(cli.CLIError) as caught:
+                    cli.parse_reply('opencode', json.dumps({'type': 'error', 'error': error}))
+                message = str(caught.exception)
+                self.assertIn('условия доступа', message)
+                self.assertIn('другая модель не выбрана', message.lower())
+                self.assertNotIn('исчерпан', message.lower())
+                self.assertNotIn('PRIVATE', message)
+                self.assertNotIn('sk-secret', message)
+                self.assertEqual('(429)' in message, status == 429)
+
+    def test_opencode_free_error_body_survives_changed_cli_error_categories(self):
+        # Newer OpenCode maps QuotaExceeded to provider.quota. Only inspect
+        # the provider's structured error type, never echo its arbitrary text.
+        for category, body_type, status in [('provider.quota', 'FreeUsageLimitError', 429),
+                                            ('provider.auth', 'FreeTierError', 403)]:
+            error = {'type': category, 'status': status, 'message': 'PRIVATE TRANSCRIPT',
+                     'response': {'body': json.dumps({'error': {'type': body_type, 'message': 'PRIVATE TRANSCRIPT'}})}}
+            with self.subTest(category=category), self.assertRaises(cli.CLIError) as caught:
+                cli.parse_reply('opencode', json.dumps({'type': 'error', 'error': error}))
+            self.assertIn('бесплатн', str(caught.exception))
+            self.assertIn(f'({status})', str(caught.exception))
+            self.assertNotIn('PRIVATE', str(caught.exception))
+        # Unknown/unstructured bodies cannot turn arbitrary provider errors
+        # into a claimed free-tier restriction.
+        with self.assertRaises(cli.CLIError) as caught:
+            cli.parse_reply('opencode', json.dumps({'type': 'error', 'error': {
+                'type': 'provider.quota', 'response': {'body': 'FreeUsageLimitError PRIVATE TRANSCRIPT'},
+            }}))
+        self.assertNotIn('бесплатн', str(caught.exception))
 
 
 class ProcessTests(unittest.IsolatedAsyncioTestCase):
@@ -177,6 +229,35 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         result = await cli.test('opencode', binary, '')
         self.assertFalse(result['ok'])
         self.assertIn('Укажите модель', result['error'])
+
+    async def test_opencode_free_rejection_keeps_exact_model_safety_and_cleanup(self):
+        capture_path = self.folder / 'calls.jsonl'
+        binary = self.executable(
+            'import sys,json\nfrom pathlib import Path\n'
+            'record={"argv":sys.argv,"cwd":str(Path.cwd())}\n'
+            'if sys.argv[1]=="run": record["config"]=json.loads(Path("opencode.json").read_text())\n'
+            f'with Path({str(capture_path)!r}).open("a") as f: f.write(json.dumps(record)+"\\n")\n'
+            'if sys.argv[1]=="api": print("{}"); sys.exit(0)\n'
+            f'print({REPLIES["opencode"]!r})\n'
+            f'print({json.dumps(OPENCODE_FREE_REJECTION)!r})\n'
+            'sys.exit(1)\n')
+        model = 'opencode/deepseek-v4.1-flash-free'
+        result = await cli.test('opencode', binary, model)
+        self.assertFalse(result['ok'], 'partial text followed by rejection is not success')
+        self.assertNotIn('response', result)
+        self.assertIn('условия доступа', result['error'])
+        self.assertNotIn('исчерпан', result['error'])
+        calls = [json.loads(line) for line in capture_path.read_text().splitlines()]
+        self.assertEqual(len(calls), 3, 'one inference, interrupt and delete; no fallback/retry')
+        argv, config = calls[0]['argv'], calls[0]['config']
+        self.assertEqual(argv[argv.index('--model') + 1], model)
+        self.assertIn({'action': 'tool.use', 'resource': '*', 'effect': 'deny'}, config['policies'])
+        self.assertEqual(config['agents']['steppe']['permissions'], [{'action': '*', 'resource': '*', 'effect': 'deny'}])
+        self.assertIn('-opencode.tool.*', config['plugins'])
+        session = argv[argv.index('--session') + 1]
+        self.assertEqual(calls[1]['argv'][1:], ['api', 'POST', f'/api/session/{session}/interrupt'])
+        self.assertEqual(calls[2]['argv'][1:], ['api', 'DELETE', f'/api/session/{session}'])
+        self.assertFalse(Path(calls[0]['cwd']).exists())
 
     async def test_check_has_no_inference_and_status_cache(self):
         invocations = []
