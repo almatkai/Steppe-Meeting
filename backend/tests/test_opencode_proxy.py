@@ -105,6 +105,25 @@ class OpenCodeProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[-1]['method'], 'DELETE')
         self.assertFalse(Path(calls[0]['cwd']).exists())
 
+    async def test_events_are_processed_while_prompt_http_response_is_pending(self):
+        binary = self.binary([
+            event('session.text.ended', assistantMessageID='msg_owned', ordinal=0, text='OK'),
+            event('permission.asked', id='per_owned'),
+        ], mode='wait-for-permission')
+        self.assertEqual(await cli.complete('opencode', binary, 'local/example',
+                         [{'role': 'user', 'content': 'Test'}], timeout=5), 'OK')
+        replies = [c for c in self.records() if '/permission/' in c.get('path', '')]
+        self.assertEqual(replies[0]['body']['decision'], 'reject')
+
+    async def test_prompt_http_failure_does_not_wait_for_an_event_that_never_arrives(self):
+        binary = self.binary([], mode='prompt-error')
+        started = time.monotonic()
+        with self.assertRaisesRegex(cli.CLIError, 'отклонил запрос'):
+            await cli.complete('opencode', binary, 'local/example',
+                               [{'role': 'user', 'content': 'Test'}], timeout=5)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assert_stopped(self.records())
+
     async def wait_prompt(self):
         for _ in range(400):
             if self.capture.exists() and any(c.get('path', '').endswith('/prompt') for c in self.records()):

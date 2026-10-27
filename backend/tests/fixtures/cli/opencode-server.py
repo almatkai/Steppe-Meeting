@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 lock = threading.Lock()
 events = queue.Queue()
+permission_replied = threading.Event()
 session_id = 'ses_steppe_owned_test_session'
 
 def record(kind, **values):
@@ -81,13 +82,20 @@ class Handler(BaseHTTPRequestHandler):
             session_id = 'ses_' + uuid.uuid4().hex[:26]
             self.reply({'data': {'id': session_id}})
         elif self.path.endswith('/prompt'):
-            self.reply({'data': {}})
+            if MODE == 'prompt-error':
+                self.reply({}, 500)
+                return
+            if MODE != 'wait-for-permission':
+                self.reply({'data': {}})
             for event in EVENTS:
                 if event.get('data', {}).get('sessionID') == 'ses_steppe_owned_test_session':
                     event['data']['sessionID'] = session_id
                 events.put(event)
+            if MODE == 'wait-for-permission':
+                self.reply({'data': {}}, 200 if permission_replied.wait(2) else 408)
         elif '/permission/' in self.path:
             self.reply(None, 204)
+            permission_replied.set()
             events.put({'type': 'session.execution.succeeded', 'data': {'sessionID': session_id}})
         elif self.path.endswith('/interrupt'):
             self.reply(None, 500 if MODE == 'cleanup-error' else 204)

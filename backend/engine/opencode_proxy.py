@@ -87,8 +87,8 @@ async def _stop(process):
     await process.wait()
 
 
-async def _json(client, method, path, payload=None):
-    async with client.stream(method, path, json=payload) as response:
+async def _json(client, method, path, payload=None, *, timeout=httpx.USE_CLIENT_DEFAULT):
+    async with client.stream(method, path, json=payload, timeout=timeout) as response:
         if not response.is_success:
             raise ProxyError('Локальный сервер OpenCode отклонил запрос')
         chunks, size = [], 0
@@ -196,6 +196,30 @@ async def _cleanup(client, session):
             pass
 
 
+async def _reply(client, response, session):
+    texts = {}
+    async for event in _events(response):
+        data = event.get('data') or {}
+        if data.get('sessionID') != session:
+            continue
+        kind = event.get('type')
+        if kind == 'permission.asked':
+            await _json(client, 'POST',
+                        f'/api/session/{session}/permission/{urllib.parse.quote(data["id"], safe="")}/reply',
+                        {'decision': 'reject', 'message': 'Tools are not available while generating text.'})
+        elif kind == 'session.text.ended':
+            texts[(data['assistantMessageID'], data['ordinal'])] = data['text']
+        elif kind == 'session.execution.failed':
+            return _failure(data.get('error') or {})
+        elif kind == 'session.execution.interrupted':
+            raise ProxyError('OpenCode прервал генерацию')
+        elif kind == 'session.execution.succeeded':
+            reply = '\n'.join(texts.values()).strip()
+            if not reply:
+                raise ProxyError('OpenCode вернул пустой ответ ассистента')
+            return 0, json.dumps({'type': 'text', 'part': {'text': reply}}), ''
+
+
 async def _turn(client, folder, model, text):
     # Let the native server allocate the session identity, as its SDK does.
     # In 2.1.4, manual UUID IDs received a free-tier 429 while a native ID
@@ -211,31 +235,27 @@ async def _turn(client, folder, model, text):
         if not isinstance(session, str) or not re.fullmatch(r'ses_[A-Za-z0-9_-]{1,100}', session):
             session = None
             raise ProxyError('OpenCode вернул некорректную сессию')
-        texts = {}
         async with client.stream('GET', '/api/event', timeout=None) as response:
             if not response.is_success:
                 raise ProxyError('Не удалось открыть поток событий OpenCode')
-            await _json(client, 'POST', f'/api/session/{session}/prompt', {'text': text})
-            async for event in _events(response):
-                data = event.get('data') or {}
-                if data.get('sessionID') != session:
-                    continue
-                kind = event.get('type')
-                if kind == 'permission.asked':
-                    await _json(client, 'POST',
-                                f'/api/session/{session}/permission/{urllib.parse.quote(data["id"], safe="")}/reply',
-                                {'decision': 'reject', 'message': 'Tools are not available while generating text.'})
-                elif kind == 'session.text.ended':
-                    texts[(data['assistantMessageID'], data['ordinal'])] = data['text']
-                elif kind == 'session.execution.failed':
-                    return _failure(data.get('error') or {})
-                elif kind == 'session.execution.interrupted':
-                    raise ProxyError('OpenCode прервал генерацию')
-                elif kind == 'session.execution.succeeded':
-                    reply = '\n'.join(texts.values()).strip()
-                    if not reply:
-                        raise ProxyError('OpenCode вернул пустой ответ ассистента')
-                    return 0, json.dumps({'type': 'text', 'part': {'text': reply}}), ''
+            # Some CLI versions hold the prompt HTTP response until generation
+            # completes. Read events concurrently so permission rejection and
+            # terminal output cannot deadlock behind that response. The outer
+            # request deadline, rather than the metadata client's 5s timeout,
+            # bounds this inference call.
+            prompt = asyncio.create_task(_json(client, 'POST', f'/api/session/{session}/prompt',
+                                               {'text': text}, timeout=None))
+            reply = asyncio.create_task(_reply(client, response, session))
+            try:
+                done, _ = await asyncio.wait([prompt, reply], return_when=asyncio.FIRST_COMPLETED)
+                if prompt in done:
+                    await prompt
+                return await reply
+            finally:
+                for task in (prompt, reply):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(prompt, reply, return_exceptions=True)
     finally:
         if session is not None:
             await asyncio.shield(_cleanup(client, session))
