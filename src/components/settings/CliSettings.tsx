@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
 import { ArrowsClockwise, CircleNotch, Info } from '@phosphor-icons/react';
 import { api } from '../../services/api';
-import type { CliCheckResult, CliModelsResult, CliProviderId, CliTestResult, SystemConfig } from '../../types';
-import { cliExecutableLabel, cliKey, cliModelVisibility, cliValidation } from '../../utils/cliSettings';
+import type { CliCheckResult, CliModelAccess, CliModelsResult, CliProviderId, SystemConfig } from '../../types';
+import { cliExecutableLabel, cliKey, cliModelVisibility, cliReadiness, cliValidation } from '../../utils/cliSettings';
 
 export const CLI_PROVIDERS: Array<{ id: CliProviderId; name: string; binary: string }> = [
   { id: 'opencode', name: 'OpenCode', binary: 'opencode' },
@@ -19,8 +19,9 @@ type Props = {
   onChange: (config: SystemConfig, debounce?: boolean) => void;
   checks: Record<string, CliCheckResult>;
   onCheck: (key: string, check: CliCheckResult) => void;
+  onAccess: (key: string, access: CliModelAccess) => void;
 };
-export function CliSettings({ config, onChange, checks, onCheck }: Props) {
+export function CliSettings({ config, onChange, checks, onCheck, onAccess }: Props) {
   const provider = config.llm_cli_provider;
   const options = config.llm_cli[provider] || {};
   const key = cliKey(config);
@@ -31,9 +32,8 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
   const [lists, setLists] = useState<Record<string, CliModelsResult>>({});
   const [freeOnly, setFreeOnly] = useState(false);
   const [busy, setBusy] = useState<Record<string, string>>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [tests, setTests] = useState<Record<string, CliTestResult>>({});
-  const identity = JSON.stringify([key, options.model || '']);
+  const [previews, setPreviews] = useState<Record<string, { tested_at: string; text: string }>>({});
+  const identity = JSON.stringify([key, options.model?.trim() || '']);
   const current = useRef(identity);
   current.current = identity;
   const list = lists[key];
@@ -42,9 +42,10 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
   const validation = cliValidation(config);
   const pathError = options.path?.trim() && !options.path.trim().startsWith('/') ? 'Путь должен начинаться с /' : '';
   const modelError = pathError || !touchedModels[key] ? '' : validation;
-  // Some CLIs cannot report login status; their model access can only be
-  // confirmed by the explicit test request. A known missing login still blocks it.
-  const ready = check?.available && check.auth !== 'required';
+  // Some CLIs cannot report login status; a model response confirms access.
+  // A failed probe or a known missing login still blocks the test.
+  const ready = check?.available && !check.error && check.auth !== 'required';
+  const status = cliReadiness(check, options.model);
   const canList = provider === 'opencode' || check?.supports_models;
   const manual = manualModels[provider] ?? !list?.models.length;
   const update = (field: 'path' | 'model', value: string, debounce = false) => {
@@ -54,7 +55,6 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
   const act = async (action: 'check' | 'models' | 'test') => {
     const requestKey = key, requestIdentity = identity;
     setBusy(prev => ({ ...prev, [requestKey]: action }));
-    setErrors(prev => ({ ...prev, [requestKey]: '' }));
     try {
       if (action === 'check') onCheck(requestKey, await api.checkCli(provider, options.path?.trim()));
       else if (action === 'models') {
@@ -63,26 +63,41 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
         if (current.current === requestIdentity && result.models.length) setManualModels(prev => ({ ...prev, [provider]: false }));
       } else {
         const result = await api.testCli(provider, options.path?.trim(), options.model?.trim());
-        setTests(prev => ({ ...prev, [requestIdentity]: result }));
+        const access = result.access || { model: options.model?.trim() || '', path: check?.path || '',
+          ok: result.ok, tested_at: new Date().toISOString(), elapsed_ms: result.elapsed_ms, error: result.error };
+        onAccess(requestKey, access);
+        // Keep only the tiny test's preview in this view. Runtime readiness
+        // stores metadata, never generated meeting content or full responses.
+        setPreviews(previous => ({ ...previous, [requestIdentity]: {
+          tested_at: access.tested_at, text: result.ok ? result.response?.slice(0, 80) || '' : '',
+        } }));
       }
     } catch (error) {
-      setErrors(prev => ({ ...prev, [requestKey]: error instanceof Error ? error.message : String(error) }));
+      const message = error instanceof Error ? error.message : String(error);
+      if (action === 'check') onCheck(requestKey, { provider, configured_path: options.path?.trim() || '', path: check?.path,
+        available: false, auth: 'unknown', supports_models: !!check?.supports_models, checked_at: new Date().toISOString(), error: message });
+      else if (action === 'test') onAccess(requestKey, { model: options.model?.trim() || '', path: check?.path || '',
+        ok: false, tested_at: new Date().toISOString(), elapsed_ms: 0, error: message });
+      else setLists(prev => ({ ...prev, [requestKey]: { provider, models: [], pricing_available: false,
+        fetched_at: new Date().toISOString(), error: message } }));
     } finally { setBusy(prev => ({ ...prev, [requestKey]: '' })); }
   };
   const visibleModels = (list?.models || []).filter(model => !freeOnly || !list?.pricing_available || model.free === true);
   const groupNames = [...new Set(visibleModels.map(model => model.provider || provider))];
   const savedModelVisibility = options.model ? cliModelVisibility(options.model, list?.models || [], visibleModels) : 'visible';
-  const test = tests[identity];
-  const error = errors[key] || list?.error || check?.error;
+  const test = status.access;
+  const preview = previews[identity]?.tested_at === test?.tested_at ? previews[identity]?.text : '';
+  const error = check?.error || (test && !test.ok ? test.error : '');
   return <div className="cli-settings space-y-4 text-xs">
     <div role="radiogroup" aria-label="CLI провайдер" className="space-y-1.5">
       {CLI_PROVIDERS.map(item => {
         const rowCheck = checks[JSON.stringify([item.id, config.llm_cli[item.id]?.path?.trim() || ''])];
-        const rowStatus = !rowCheck ? 'Не проверен' : !rowCheck.available ? 'Не найден' : rowCheck.auth === 'required' ? 'Нужен вход' : `Найден, ${rowCheck.version || 'версия неизвестна'}`;
+        const row = cliReadiness(rowCheck, config.llm_cli[item.id]?.model);
+        const rowStatus = row.label;
         return <label key={item.id} className={`min-h-9 min-w-0 flex items-center gap-2 px-3 py-2 rounded-xl border cursor-pointer ${provider === item.id ? 'bg-neutral-800 border-neutral-600 font-semibold text-white' : 'border-neutral-800 text-neutral-300'}`}>
           <input type="radio" name="llm-cli-provider" value={item.id} checked={provider === item.id}
             onChange={() => { onChange({ ...config, llm_cli_provider: item.id }); setFreeOnly(false); }} />
-          <span className="shrink-0">{item.name}</span><span title={rowStatus} className={`ml-auto min-w-0 truncate text-[11px] font-normal ${rowCheck && !rowCheck.available ? 'text-rose-400' : rowCheck?.auth === 'required' ? 'text-amber-400' : 'text-neutral-400'}`}>{rowStatus}</span>
+          <span className="shrink-0">{item.name}</span><span title={rowStatus} className={`ml-auto min-w-0 truncate text-[11px] font-normal ${row.tone === 'error' ? 'text-rose-400' : row.tone === 'warning' ? 'text-amber-400' : row.tone === 'success' ? 'text-emerald-400' : 'text-neutral-400'}`}>{rowStatus}</span>
         </label>;
       })}
     </div>
@@ -129,7 +144,7 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
         <label className="min-h-7 flex items-center gap-2 text-neutral-300"><input type="checkbox" checked={freeOnly && !!list?.pricing_available} disabled={!list?.pricing_available} onChange={event => setFreeOnly(event.target.checked)} />Только бесплатные</label>
         {!list?.pricing_available && <p className="text-[11px] text-neutral-500">OpenCode не сообщает стоимость моделей — бесплатность определить нельзя</p>}
       </div>}
-      {list && <p className="text-[11px] text-neutral-500">Список получен в {time(list.fetched_at)}</p>}
+      {list && <p className="text-[11px] text-neutral-500">{list.error ? 'Попытка загрузки в' : 'Список получен в'} {time(list.fetched_at)}</p>}
     </div>
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
@@ -143,12 +158,13 @@ export function CliSettings({ config, onChange, checks, onCheck }: Props) {
       {!check && <p className="text-[11px] text-neutral-400">Сначала нажмите «Проверить CLI».</p>}
       {check?.auth === 'required' && <p className="text-[11px] text-neutral-400">Выполните вход в CLI, затем повторите проверку.</p>}
       <p className="text-[11px] text-neutral-500">Изменения настроек сохраняются автоматически. «Проверить CLI» проверяет текущий путь без запроса модели. «Тестовый запрос» отправляет один короткий запрос текущей модели; у платных моделей он тарифицируется. Проверки не меняют настройки, ответ теста не сохраняется.</p>
-      {check?.available && check.auth === 'unknown' && <p className="text-[11px] text-neutral-400">CLI не сообщает статус входа. Тестовый запрос проверит доступ к выбранной модели.</p>}
+      {check?.available && check.auth === 'unknown' && <p className="text-[11px] text-neutral-400">CLI не сообщает статус входа. {status.ready ? 'Доступ к выбранной модели подтверждён ответом.' : 'Доступ к выбранной модели проверяется тестовым запросом.'}</p>}
       <p className="text-[11px] text-neutral-400">При ошибке CLI генерация остановится — автоматического переключения на другой провайдер нет.</p>
       <div aria-live="polite" aria-atomic="true" className="text-[11px] text-neutral-300 space-y-1 break-words">
         {check && <><p className="font-mono break-all">{check.path}</p><p>{check.version}</p><p>Вход: {check.auth === 'authenticated' ? 'выполнен' : check.auth === 'required' ? 'нужен вход' : 'неизвестен'}</p><p>Проверено в {time(check.checked_at)}</p></>}
         {list && <p>Получено моделей: {list.models.length}</p>}
-        {test && <p>{test.ok ? `Ответ за ${test.elapsed_ms} мс: ${test.response?.slice(0, 80)}` : `Тест не выполнен: ${test.error}`}</p>}
+        {list?.error && <p className="text-amber-400">Список моделей: {list.error}</p>}
+        {test && <p className={test.ok ? 'text-emerald-400' : 'text-rose-400'}>{test.ok ? `Модель ответила за ${test.elapsed_ms} мс${preview ? `: ${preview}` : ''}` : 'Запрос к модели не выполнен'} · {time(test.tested_at)}</p>}
         {error && <p className="text-rose-400">{error}</p>}
       </div>
       {error && <details className="text-[11px] text-neutral-500"><summary className="min-h-7 cursor-pointer">Вывод CLI</summary><pre className="whitespace-pre-wrap break-all max-h-40 overflow-auto">{error.slice(0, 2048)}</pre></details>}

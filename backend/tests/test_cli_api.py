@@ -26,6 +26,8 @@ class CLIAPITests(unittest.TestCase):
             db.execute('DELETE FROM chat_sessions')
             db.commit()
         server.sync_generation_settings()
+        cli_llm._ACCESS.clear()
+        cli_llm._CACHE.clear()
         self.no_http = patch.object(server.httpx.AsyncClient, 'post', side_effect=AssertionError('HTTP inference forbidden'))
         self.no_http.start()
         self.addCleanup(self.no_http.stop)
@@ -124,9 +126,86 @@ class CLIAPITests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body['cli'], check)
         self.assertEqual(body['llm_mode'], 'cli')
-        self.assertTrue(body['ollama']['connected'])
+        self.assertFalse(body['ollama']['connected'])
+        self.assertFalse(body['ollama']['model_ready'])
+        self.assertTrue(body['ollama']['service_online'])
         self.assertIn('available_models', body['ollama'])
         probe.assert_awaited_once_with('codex', '/test/cli', cached=True)
+
+    def test_all_cli_routes_share_exact_runtime_model_access_without_persisting_answers(self):
+        for provider in cli_llm.PROVIDERS:
+            self.activate(provider)
+            before = self.client.get('/api/v1/system/config').json()
+            check = {'provider': provider, 'configured_path': '/test/cli', 'path': '/test/cli',
+                     'available': True, 'auth': 'unknown', 'supports_models': False,
+                     'checked_at': cli_llm.now()}
+            with patch.object(cli_llm, '_check', AsyncMock(side_effect=lambda *a, **kw: check.copy())), \
+                 patch.object(cli_llm, 'resolve', return_value='/test/cli'), \
+                 patch.object(cli_llm, '_complete', AsyncMock(return_value='{"answer":"OK"}')) as request, \
+                 patch.object(server.whisper_service, 'get_whisper_full_status', return_value={
+                     'ready': False, 'local': {'error': 'missing weights'}}):
+                def status(ready):
+                    body = self.client.get('/api/v1/system/status').json()
+                    self.assertEqual(body['ollama']['model_ready'], ready)
+                    self.assertEqual(body['ollama']['connected'], ready)
+                    self.assertEqual(body['cli']['auth'], 'unknown')
+                    self.assertNotIn('error', body['cli'])
+                    self.assertNotIn('response', body['cli'].get('model_access', {}))
+                    return body
+                status(False)
+                tested = self.client.post('/api/v1/system/cli/test', json={
+                    'provider': provider, 'path': '/test/cli', 'model': 'local/example#precise'})
+                self.assertTrue(tested.json()['ok'])
+                status(True)
+                self.assertEqual(self.client.get('/api/v1/system/config').json(), before)
+                self.save(llm_cli={provider: {'path': '/test/cli', 'model': 'local/changed#precise'}})
+                status(False)
+                self.save(llm_cli={provider: {'path': '/different/cli', 'model': 'local/example#precise'}})
+                status(False)
+                self.save(llm_cli=before['llm_cli'])
+                with patch.object(cli_llm, '_complete', AsyncMock(side_effect=cli_llm.CLIError('selected model failed'))):
+                    failed = self.client.post('/api/v1/system/cli/test', json={
+                        'provider': provider, 'path': '/test/cli', 'model': 'local/example#precise'})
+                    self.assertFalse(failed.json()['ok'])
+                self.assertEqual(status(False)['ollama']['error'], 'selected model failed')
+                for route, body in [('/chat', {'messages': [{'role': 'user', 'content': 'Synthetic question'}]}),
+                                    ('/edit', {'selected_text': 'Synthetic', 'instruction': 'Edit'})]:
+                    self.assertEqual(self.client.post('/api/v1' + route, json=body).status_code, 200)
+                    status(True)
+                async def generate():
+                    self.assertEqual(await llm.complete_json([{'role': 'user', 'content': 'JSON'}]), {'answer': 'OK'})
+                    self.assertEqual(await llm.complete_text('Text'), '{"answer":"OK"}')
+                asyncio.run(generate())
+                status(True)
+                self.assertEqual(request.await_count, 5)
+                for call in request.await_args_list:
+                    self.assertEqual(call.args[:3], (provider, '/test/cli', 'local/example#precise'))
+
+    def test_all_provider_failures_stop_each_route_without_http_retry(self):
+        for provider in cli_llm.PROVIDERS:
+            self.activate(provider)
+            with patch.object(cli_llm, 'resolve', return_value='/test/cli'), \
+                 patch.object(cli_llm, '_complete', AsyncMock(side_effect=cli_llm.CLIError('selected CLI failed'))) as request:
+                tested = self.client.post('/api/v1/system/cli/test', json={
+                    'provider': provider, 'path': '/test/cli', 'model': 'local/example#precise'})
+                self.assertFalse(tested.json()['ok'])
+                chat = self.client.post('/api/v1/chat', json={'messages': [{'role': 'user', 'content': 'Synthetic'}]})
+                self.assertIn('selected CLI failed', chat.text)
+                self.assertNotIn('[DONE]', chat.text)
+                edit = self.client.post('/api/v1/edit', json={'selected_text': 'Synthetic', 'instruction': 'Edit'})
+                self.assertEqual(edit.status_code, 502)
+                async def generate():
+                    with self.assertRaises(llm.LLMError):
+                        await llm.complete_json([{'role': 'user', 'content': 'JSON'}])
+                    with self.assertRaises(llm.LLMError):
+                        await llm.complete_text('Text')
+                    with self.assertRaises(llm.LLMError):
+                        async for _ in llm.stream_chat([{'role': 'user', 'content': 'Stream'}]):
+                            pass
+                asyncio.run(generate())
+                self.assertEqual(request.await_count, 6)
+                self.assertTrue(all(call.args[:3] == (provider, '/test/cli', 'local/example#precise')
+                                    for call in request.await_args_list))
 
     def test_chat_and_edit_preserve_roles_and_sse_all_providers(self):
         for provider in cli_llm.PROVIDERS:

@@ -17,11 +17,34 @@ export function cliValidation(config: SystemConfig) {
   return '';
 }
 
-export function cliStatus(check?: CliCheckResult) {
-  if (!check) return 'Не проверен';
-  if (!check.available) return check.path ? 'Недоступно' : 'Не найден';
-  if (check.auth === 'required') return 'Нужен вход';
-  return check.auth === 'authenticated' ? 'Готов' : 'Найден, вход неизвестен';
+// All CLI surfaces derive readiness from the same probe + exact request evidence.
+export function cliReadiness(check?: CliCheckResult, model = '') {
+  const access = check?.model_access;
+  const matching = access && access.model === model.trim() && (access.path === check?.path || !access.ok) ? access : undefined;
+  if (!check) return { ready: false, tone: 'neutral', label: 'Не проверен', access: undefined };
+  if (!check.available || check.error || check.auth === 'required') return {
+    ready: false, tone: check.auth === 'required' ? 'warning' : 'error', access: undefined,
+    label: check.auth === 'required' ? 'Нужен вход' : !check.available && !check.path ? 'Не найден' : 'Недоступно',
+  };
+  if (matching) return { ready: matching.ok, tone: matching.ok ? 'success' : 'error',
+    label: matching.ok ? 'Модель отвечает' : 'Ошибка запроса', access: matching };
+  return { ready: false, tone: 'neutral', access: undefined,
+    label: check.auth === 'authenticated' ? 'Вход выполнен, модель не проверена' : 'Доступ к модели не проверен' };
+}
+
+export function cliStatus(check?: CliCheckResult, model = '') {
+  return cliReadiness(check, model).label;
+}
+
+export function mergeCliCheck(previous: CliCheckResult | undefined, incoming: CliCheckResult): CliCheckResult {
+  if (!previous) return incoming;
+  const check = Date.parse(previous.checked_at) > Date.parse(incoming.checked_at) ? previous : incoming;
+  const accesses = [previous.model_access, incoming.model_access]
+    .filter(access => access)
+    // Date.parse truncates sub-millisecond backend timestamps. Prefer a failure
+    // on ties so a cached pass cannot hide a freshly failed request.
+    .sort((a, b) => Date.parse(b!.tested_at) - Date.parse(a!.tested_at) || Number(a!.ok) - Number(b!.ok));
+  return { ...check, model_access: accesses[0] };
 }
 
 export function cliExecutableLabel(check?: CliCheckResult) {

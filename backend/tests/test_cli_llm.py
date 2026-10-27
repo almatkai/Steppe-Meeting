@@ -133,6 +133,8 @@ class ParserTests(unittest.TestCase):
 
 class ProcessTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        cli._ACCESS.clear()
+        cli._CACHE.clear()
         self.storage = tempfile.TemporaryDirectory(prefix='steppe-cli-tests-')
         self.folder = Path(self.storage.name)
 
@@ -251,11 +253,84 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(overridden['path'], '/fake/codex')
         self.assertNotIn('exec', str(invocations))
 
+    async def test_model_access_is_runtime_evidence_not_login_identity(self):
+        cli._ACCESS.clear()
+        for provider in cli.PROVIDERS:
+            model = 'provider/exact#fast' if provider == 'opencode' else ''
+            with patch.object(cli, 'resolve', return_value='/fake/cli'), \
+                 patch.object(cli, 'run', AsyncMock(return_value=(0, REPLIES[provider], ''))), \
+                 patch.object(cli.opencode_proxy, 'request', AsyncMock(return_value=(0, REPLIES[provider], ''))):
+                result = await cli.test(provider, '/configured/cli', model)
+                self.assertTrue(result['ok'])
+                self.assertEqual(result['access']['model'], model)
+                self.assertEqual(result['access']['path'], '/fake/cli')
+                self.assertNotIn('response', result['access'])
+                check = {'available': True, 'auth': 'unknown', 'path': '/fake/cli',
+                         'model_access': result['access']}
+                self.assertTrue(cli.model_ready(check, model))
+                for changed in ({'auth': 'required'}, {'available': False}, {'path': '/other/cli'},
+                                {'error': 'probe failed'}):
+                    self.assertFalse(cli.model_ready({**check, **changed}, model))
+                self.assertFalse(cli.model_ready(check, model + '-other'))
+                with patch.object(cli, 'run', AsyncMock(return_value=(1, '', 'private'))), \
+                     patch.object(cli.opencode_proxy, 'request', side_effect=cli.opencode_proxy.ProxyError('failed')):
+                    failed = await cli.test(provider, '/configured/cli', model)
+                self.assertFalse(failed['ok'])
+                self.assertFalse(failed['access']['ok'])
+                self.assertFalse(cli.model_ready({**check, 'model_access': failed['access']}, model))
+
+    async def test_all_provider_checks_only_probe_metadata(self):
+        for provider in cli.PROVIDERS:
+            calls = []
+            async def metadata(argv, **options):
+                calls.append(argv[1:])
+                if '--version' in argv:
+                    return 0, 'v1', ''
+                return 0, {'codex': 'Logged in', 'claude': '{"loggedIn":true}',
+                           'opencode': '[]'}[provider], ''
+            with patch.object(cli, 'resolve', return_value='/fake/cli'), \
+                 patch.object(cli, 'run', metadata), \
+                 patch.object(cli, 'complete', side_effect=AssertionError('no inference')), \
+                 patch.object(cli.opencode_proxy, 'request', side_effect=AssertionError('no inference')):
+                check = await cli.check(provider, '/configured/cli')
+            self.assertTrue(check['available'])
+            self.assertNotIn('error', check)
+            self.assertEqual(calls[0], ['--version'])
+            expected_auth = {'codex': ['login', 'status'], 'claude': ['auth', 'status', '--json'],
+                             'opencode': ['auth', 'list', '--format', 'json']}.get(provider)
+            self.assertEqual(calls[1:], [expected_auth] if expected_auth else [])
+
+    async def test_missing_executable_after_success_replaces_runtime_access(self):
+        with patch.object(cli, 'resolve', return_value='/fake/codex'), \
+             patch.object(cli, 'run', AsyncMock(return_value=(0, REPLIES['codex'], ''))):
+            self.assertTrue((await cli.test('codex'))['ok'])
+        with patch.object(cli, 'resolve', side_effect=cli.CLIError('codex не найден')):
+            failed = await cli.test('codex')
+            check = await cli.check('codex')
+        self.assertFalse(failed['ok'])
+        self.assertFalse(check['model_access']['ok'])
+        self.assertFalse(cli.model_ready(check))
+        self.assertIn('не найден', failed['access']['error'])
+
+    async def test_negative_login_and_failed_probe_cannot_reuse_previous_model_success(self):
+        cli._ACCESS.clear()
+        cli._ACCESS[('codex', '')] = {'ok': True, 'model': '', 'path': '/fake/codex'}
+        for code, text, auth in [(0, 'Not logged in', 'required'), (1, 'Not logged in', 'required'),
+                                 (1, 'probe unavailable', 'unknown')]:
+            calls = [(0, 'v1', ''), (code, text, '')]
+            with patch.object(cli, 'resolve', return_value='/fake/codex'), \
+                 patch.object(cli, 'run', AsyncMock(side_effect=calls)):
+                check = await cli.check('codex')
+            self.assertEqual(check['auth'], auth)
+            self.assertIn('error', check)
+            self.assertFalse(cli.model_ready(check))
+
     async def test_unknown_auth_is_not_authenticated(self):
         with patch.object(cli, 'resolve', return_value='/fake/agy'), patch.object(cli, 'run', AsyncMock(return_value=(0, 'v1', ''))):
             result = await cli.check('antigravity')
         self.assertEqual(result['auth'], 'unknown')
-        self.assertIn('неизвестен', result['error'])
+        self.assertNotIn('error', result)
+        self.assertNotEqual(result['auth'], 'authenticated')
 
 
 if __name__ == '__main__':

@@ -2221,7 +2221,10 @@ async def system_status():
         cli_status = await cli_llm.check(provider, options.get("path", ""), cached=True)
         ollama_err = cli_status.get("error", "")
         ollama_ok = cli_status["available"]
-        model_ready = cli_status["auth"] == "authenticated"
+        model_ready = cli_llm.model_ready(cli_status, options.get("model", ""))
+        access = cli_status.get("model_access") or {}
+        if not ollama_err and access.get("model") == options.get("model", "").strip() and not access.get("ok"):
+            ollama_err = access.get("error", "")
         llm_url = cli_status.get("path", provider)
         current_model = options.get("model") or "CLI default"
     else:

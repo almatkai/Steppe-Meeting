@@ -29,6 +29,9 @@ MAX_OUTPUT = 8 * 1024 * 1024
 MAX_STDERR = 64 * 1024
 _CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
 _CHECK_LOCKS = weakref.WeakKeyDictionary()
+# Latest completed request per provider/override, kept only in process memory.
+# Store metadata, never prompts, responses, credentials or claimed login state.
+_ACCESS: dict[tuple[str, str], dict] = {}
 
 
 
@@ -255,8 +258,37 @@ def parse_reply(provider: str, stdout: str) -> str:
 
 
 async def complete(provider, path, model, messages, *, json_mode=False, timeout=300):
-    validate(provider, path, model, require_model=True)
-    binary = resolve(provider, path)
+    path, model = path.strip(), model.strip()
+    started = time.monotonic()
+    access = {'model': model, 'path': '', 'ok': False}
+    try:
+        validate(provider, path, model, require_model=True)
+        binary = resolve(provider, path)
+        access['path'] = binary
+        response = await _complete(provider, binary, model, messages, json_mode=json_mode, timeout=timeout)
+        access['ok'] = True
+        return response
+    except (CLIError, ValueError, OSError) as error:
+        access['error'] = diagnostic(str(error))
+        raise
+    except asyncio.CancelledError:
+        access['error'] = 'Запрос отменён'
+        raise
+    finally:
+        access.update(tested_at=now(), elapsed_ms=round((time.monotonic() - started) * 1000))
+        if len(_ACCESS) >= 128 and (provider, path) not in _ACCESS:
+            _ACCESS.pop(next(iter(_ACCESS)))
+        _ACCESS[(provider, path)] = access
+
+
+def model_ready(check, model=''):
+    access = check.get('model_access') or {}
+    return bool(check.get('available') and not check.get('error') and check.get('auth') != 'required'
+                and access.get('ok') and access.get('path') == check.get('path')
+                and access.get('model') == model.strip())
+
+
+async def _complete(provider, binary, model, messages, *, json_mode=False, timeout=300):
     text = prompt(messages, json_mode)
     if provider == 'antigravity':
         text = json.dumps({'event': 'user', 'message': {'content': text}}, ensure_ascii=False) + '\n'
@@ -366,12 +398,17 @@ async def models(provider, path=''):
 
 async def check(provider, path='', *, cached=False):
     if not cached:
-        return await _check(provider, path)
-    # Status polls may overlap during a slow CLI startup. Coalesce only within
-    # this event loop; explicit button checks still request a fresh probe.
-    locks = _CHECK_LOCKS.setdefault(asyncio.get_running_loop(), {})
-    async with locks.setdefault((provider, path), asyncio.Lock()):
-        return await _check(provider, path, cached=True)
+        result = await _check(provider, path)
+    else:
+        # Status polls may overlap during a slow CLI startup. Coalesce only within
+        # this event loop; explicit button checks still request a fresh probe.
+        locks = _CHECK_LOCKS.setdefault(asyncio.get_running_loop(), {})
+        async with locks.setdefault((provider, path), asyncio.Lock()):
+            result = await _check(provider, path, cached=True)
+    access = _ACCESS.get((provider, path))
+    if access:
+        result['model_access'] = access.copy()
+    return result
 
 
 async def _check(provider, path='', *, cached=False):
@@ -397,10 +434,10 @@ async def _check(provider, path='', *, cached=False):
                     code, out, err = await run([binary, *auth_args], cwd=folder, env=env)
                     if provider == 'codex':
                         status = (out + err).lower()
-                        if code == 0 and 'logged in' in status:
-                            result['auth'] = 'authenticated'
-                        elif 'not logged in' in status:
+                        if 'not logged in' in status:
                             result['auth'] = 'required'
+                        elif code == 0 and 'logged in' in status:
+                            result['auth'] = 'authenticated'
                     elif provider == 'claude':
                         try:
                             logged_in = json.loads(out).get('loggedIn')
@@ -418,9 +455,9 @@ async def _check(provider, path='', *, cached=False):
                                 result['auth'] = 'authenticated' if connected else 'unknown'
                         except ValueError:
                             pass
-                if result['auth'] == 'unknown':
-                    result['error'] = 'Статус входа неизвестен: CLI не предоставляет подтверждение. Выполните вход в терминале; готовность не подтверждена.'
-                elif result['auth'] == 'required':
+                if auth_args and code and result['auth'] != 'required':
+                    raise CLIError('Не удалось проверить вход в CLI. Повторите проверку; доступ к модели не подтверждён.')
+                if result['auth'] == 'required':
                     login = {'codex': 'codex login', 'opencode': 'opencode auth login'}.get(provider)
                     result['error'] = 'CLI найден, но вход не выполнен. Выполните вход в терминале и повторите проверку.' + (f' Команда: {login}' if login else '')
     except TimeoutError:
@@ -435,6 +472,8 @@ async def test(provider, path='', model=''):
     started = time.monotonic()
     try:
         response = await complete(provider, path, model, [{'role': 'user', 'content': 'Reply with OK only.'}], timeout=60)
-        return {'ok': True, 'response': diagnostic(response[:200]), 'elapsed_ms': round((time.monotonic()-started)*1000)}
+        return {'ok': True, 'response': diagnostic(response[:200]), 'elapsed_ms': round((time.monotonic()-started)*1000),
+                'access': _ACCESS.get((provider, path.strip()))}
     except (CLIError, ValueError, OSError) as error:
-        return {'ok': False, 'error': diagnostic(str(error)), 'elapsed_ms': round((time.monotonic()-started)*1000)}
+        return {'ok': False, 'error': diagnostic(str(error)), 'elapsed_ms': round((time.monotonic()-started)*1000),
+                'access': _ACCESS.get((provider, path.strip()))}

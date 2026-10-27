@@ -25,11 +25,11 @@ import { settingsAutosave, loadSettingsConfig } from "../../store/settingsStore"
 import { UpdatesCard } from "./UpdatesCard";
 import { SaveIndicator } from "./SaveIndicator";
 import { CliSettings } from "./CliSettings";
-import { cliCheckKey, cliKey, cliStatus } from "../../utils/cliSettings";
+import { cliKey, cliReadiness, cliStatus } from "../../utils/cliSettings";
 import { api } from "../../services/api";
 import { useMeetingStore } from "../../store/useMeetingStore";
 import { TemplateManager } from "../templates/TemplateManager";
-import type { CliCheckResult, SystemConfig, SystemStatus, WhisperStatus } from "../../types";
+import type { SystemConfig, SystemStatus, WhisperStatus } from "../../types";
 
 interface WhisperPreset {
   id: string;
@@ -137,24 +137,13 @@ const DEFAULT_CONFIG: SystemConfig = {
 const modelEndpointKey = (value: SystemConfig) => JSON.stringify([value.llm_mode, value.llm_base_url.trim(), value.llm_api_key?.trim() || '']);
 
 export const SettingsView: React.FC = () => {
-  const { systemStatus, checkStatus } = useMeetingStore();
+  const { systemStatus, checkStatus, cliChecks, setCliCheck, setCliAccess } = useMeetingStore();
 
   const autosave = useSyncExternalStore(settingsAutosave.subscribe, settingsAutosave.getSnapshot);
   const config = autosave.config || DEFAULT_CONFIG;
   const setConfig = settingsAutosave.change;
   const settingsLoaded = !!autosave.config;
 
-  const [cliChecks, setCliChecks] = useState<Record<string, CliCheckResult>>({});
-  useEffect(() => {
-    const check = systemStatus?.llm_mode === 'cli' ? systemStatus.cli : undefined;
-    if (!check) return;
-    setCliChecks(previous => {
-      const key = cliCheckKey(check);
-      // Preserve a newer explicit check when a cached status poll completes.
-      if (previous[key] && Date.parse(previous[key].checked_at) >= Date.parse(check.checked_at)) return previous;
-      return { ...previous, [key]: check };
-    });
-  }, [systemStatus]);
   const [loadError, setLoadError] = useState("");
   const [whisperError, setWhisperError] = useState("");
   const [isLoadingWhisper, setIsLoadingWhisper] = useState(true);
@@ -320,6 +309,8 @@ export const SettingsView: React.FC = () => {
   }, [autosave.saveRevision, checkStatus]);
 
   const activeCliCheck = cliChecks[cliKey(config)];
+  const activeCliModel = config.llm_cli[config.llm_cli_provider]?.model?.trim() || "";
+  const activeCliStatus = cliReadiness(activeCliCheck, activeCliModel);
   const ollamaOk = systemStatus?.ollama?.connected;
   const ollamaErr = systemStatus?.ollama?.error;
   const localSelectionText = autosave.stt.status === 'error' ? 'Выбор не сохранён'
@@ -362,8 +353,8 @@ export const SettingsView: React.FC = () => {
             </div>
 
             {config.llm_mode === "cli" ? (
-              <span className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full border ${activeCliCheck?.available && activeCliCheck.auth === "authenticated" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" : activeCliCheck?.auth === "required" ? "text-amber-400 bg-amber-500/10 border-amber-500/20" : activeCliCheck && !activeCliCheck.available ? "text-rose-400 bg-rose-500/10 border-rose-500/20" : "text-neutral-400 border-neutral-700"}`}>
-                {cliStatus(activeCliCheck)}
+              <span className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full border ${activeCliStatus.tone === "success" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" : activeCliStatus.tone === "warning" ? "text-amber-400 bg-amber-500/10 border-amber-500/20" : activeCliStatus.tone === "error" ? "text-rose-400 bg-rose-500/10 border-rose-500/20" : "text-neutral-400 border-neutral-700"}`}>
+                {cliStatus(activeCliCheck, activeCliModel)}
               </span>
             ) : ollamaOk ? (
               <span className="flex items-center gap-1 text-emerald-400 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
@@ -394,7 +385,7 @@ export const SettingsView: React.FC = () => {
           </div>
           {config.llm_mode === 'cli' ? (
             <CliSettings config={config} onChange={setConfig} checks={cliChecks}
-              onCheck={(key, result) => setCliChecks(prev => ({ ...prev, [key]: result }))} />
+              onCheck={setCliCheck} onAccess={setCliAccess} />
           ) : (<>
           {/* Connection error or model missing message if any */}
           {!ollamaOk && ollamaErr && (

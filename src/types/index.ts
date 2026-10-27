@@ -142,17 +142,20 @@ export interface WhisperStatus {
 
 export type CliProviderId = 'opencode' | 'codex' | 'claude' | 'antigravity';
 export interface CliOptions { path?: string; model?: string }
+export interface CliModelAccess {
+  model: string; path: string; ok: boolean; tested_at: string; elapsed_ms: number; error?: string;
+}
 export interface CliCheckResult {
   provider: CliProviderId; available: boolean; path?: string; configured_path?: string; version?: string;
   auth: 'authenticated' | 'required' | 'unknown'; supports_models: boolean;
-  error?: string; checked_at: string;
+  error?: string; checked_at: string; model_access?: CliModelAccess;
 }
 export interface CliModelsResult {
   provider: CliProviderId;
   models: Array<{ id: string; name?: string; provider?: string; free: boolean | null }>;
   fetched_at: string; pricing_available: boolean; error?: string;
 }
-export interface CliTestResult { ok: boolean; response?: string; elapsed_ms: number; error?: string }
+export interface CliTestResult { ok: boolean; response?: string; elapsed_ms: number; error?: string; access?: CliModelAccess }
 
 export interface SystemStatus {
   cli?: CliCheckResult;

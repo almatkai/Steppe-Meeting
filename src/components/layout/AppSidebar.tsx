@@ -15,12 +15,14 @@ import {
 } from "@phosphor-icons/react";
 import { SteppeLogo } from "../ui/SteppeIcon";
 import { useMeetingStore } from "../../store/useMeetingStore";
+import { settingsAutosave } from "../../store/settingsStore";
 import { updateTracker } from "../../store/updateStore";
-import { cliModelName, cliStatus } from "../../utils/cliSettings";
+import { cliCheckKey, cliKey, cliModelName, cliReadiness, cliStatus } from "../../utils/cliSettings";
 
 export const AppSidebar: React.FC = () => {
+  const settings = useSyncExternalStore(settingsAutosave.subscribe, settingsAutosave.getSnapshot);
   const updates = useSyncExternalStore(updateTracker.subscribe, updateTracker.getSnapshot);
-  const { currentView, setView, systemStatus, checkStatus, meetings, setMiniMode } = useMeetingStore();
+  const { currentView, setView, systemStatus, checkStatus, meetings, setMiniMode, cliChecks } = useMeetingStore();
 
   useEffect(() => {
     checkStatus();
@@ -30,8 +32,13 @@ export const AppSidebar: React.FC = () => {
 
   const ollamaOk = systemStatus?.ollama?.connected;
   const whisperOk = systemStatus?.whisper?.connected;
-  const cliMode = systemStatus?.llm_mode === 'cli';
-  const cli = systemStatus?.cli;
+  const config = settings.config;
+  const cliMode = (config?.llm_mode || systemStatus?.llm_mode) === 'cli';
+  const polledCli = systemStatus?.cli;
+  const cli = config ? cliChecks[cliKey(config)] : polledCli ? cliChecks[cliCheckKey(polledCli)] || polledCli : undefined;
+  const cliModel = config ? config.llm_cli[config.llm_cli_provider]?.model?.trim() || ''
+    : systemStatus?.ollama?.model === 'CLI default' ? '' : systemStatus?.ollama?.model || '';
+  const cliState = cliReadiness(cli, cliModel);
 
   return (
     <aside className="w-64 border-r border-neutral-800 bg-neutral-900/70 backdrop-blur-xl flex flex-col justify-between select-none">
@@ -150,12 +157,12 @@ export const AppSidebar: React.FC = () => {
             <div className="flex items-center gap-2 truncate">
               <Cpu className="w-3.5 h-3.5 text-neutral-300 shrink-0" />
               <span className="text-neutral-300 truncate font-mono">
-                {cliMode ? cliModelName(systemStatus?.ollama?.model) : systemStatus?.ollama?.model || "LLM"}
+                {cliMode ? cliModelName(cliModel) : systemStatus?.ollama?.model || "LLM"}
               </span>
             </div>
             {cliMode ? (
-              <div title={cli?.error} className={`font-medium ${!cli ? 'text-neutral-400' : !cli.available ? 'text-rose-400' : cli.auth === 'required' ? 'text-amber-400' : cli.auth === 'authenticated' ? 'text-emerald-400' : 'text-neutral-400'}`}>
-                {cliStatus(cli)}
+              <div title={cli?.error || cliState.access?.error} className={`font-medium ${cliState.tone === 'error' ? 'text-rose-400' : cliState.tone === 'warning' ? 'text-amber-400' : cliState.tone === 'success' ? 'text-emerald-400' : 'text-neutral-400'}`}>
+                {cliStatus(cli, cliModel)}
               </div>
             ) : ollamaOk ? (
               <div className="flex items-center gap-1 text-emerald-400 font-medium shrink-0">

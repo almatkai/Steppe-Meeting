@@ -1,7 +1,8 @@
 import { create } from "zustand";
-import type { Meeting, SystemStatus } from "../types";
+import type { CliCheckResult, CliModelAccess, Meeting, SystemStatus } from "../types";
 import { api } from "../services/api";
 import { openMiniWindow, restoreMainWindow } from "../utils/tauriWindow";
+import { cliCheckKey, mergeCliCheck } from "../utils/cliSettings";
 import { toast } from "sonner";
 
 interface MeetingStore {
@@ -11,6 +12,9 @@ interface MeetingStore {
   meetings: Meeting[];
   isLoading: boolean;
   systemStatus: SystemStatus | null;
+  cliChecks: Record<string, CliCheckResult>;
+  setCliCheck: (key: string, check: CliCheckResult) => void;
+  setCliAccess: (key: string, access: CliModelAccess) => void;
   isMiniMode: boolean;
 
   setView: (view: "wizard" | "meeting" | "history" | "settings" | "chat") => void;
@@ -30,6 +34,15 @@ export const useMeetingStore = create<MeetingStore>((set, get) => ({
   meetings: [],
   isLoading: false,
   systemStatus: null,
+  cliChecks: {},
+  setCliCheck: (key, check) => set(state => ({ cliChecks: {
+    ...state.cliChecks, [key]: mergeCliCheck(state.cliChecks[key], check),
+  } })),
+  setCliAccess: (key, access) => set(state => {
+    const check = state.cliChecks[key];
+    if (!check) return {};
+    return { cliChecks: { ...state.cliChecks, [key]: mergeCliCheck(check, { ...check, model_access: access }) } };
+  }),
   isMiniMode: false,
 
   setView: (view) => set({ currentView: view }),
@@ -100,8 +113,14 @@ export const useMeetingStore = create<MeetingStore>((set, get) => ({
     try {
       const status = await api.getSystemStatus();
       set({ systemStatus: status });
+      if (status.llm_mode === 'cli' && status.cli) get().setCliCheck(cliCheckKey(status.cli), status.cli);
     } catch (e) {
-      set({ systemStatus: null });
+      // A failed status request must not leave the sidebar showing an old pass.
+      const checked_at = new Date().toISOString();
+      set(state => ({ systemStatus: null, cliChecks: Object.fromEntries(
+        Object.entries(state.cliChecks).map(([key, check]) => [key, { ...check, checked_at,
+          error: 'Не удалось получить состояние CLI. Повторите проверку.' }]),
+      ) }));
       console.error("Failed to fetch system status", e);
     }
   },
