@@ -100,7 +100,9 @@ fn start(app: tauri::AppHandle) -> Result<(), String> {
     let stderr = log.try_clone().map_err(|e| e.to_string())?;
     let mut child = Command::new("/bin/bash")
         .arg(directory.join("run_backend.sh"))
-        .current_dir(&directory)
+        // The script resolves its own directory. Start from a stable system
+        // directory so shell initialization need not resolve a Desktop path.
+        .current_dir("/")
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr))
