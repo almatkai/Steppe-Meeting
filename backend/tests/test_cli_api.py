@@ -14,7 +14,7 @@ _storage = tempfile.TemporaryDirectory(prefix='steppe-cli-api-')
 with patch.dict(os.environ, STEPPE_DATA_DIR=_storage.name):
     import desktop_server as server
 from fastapi.testclient import TestClient
-from engine import cli_llm, llm
+from engine import cli_llm, llm, opencode_proxy
 
 
 class CLIAPITests(unittest.TestCase):
@@ -183,6 +183,30 @@ class CLIAPITests(unittest.TestCase):
                 self.assertEqual(call.await_count, 3)
         asyncio.run(exercise())
 
+    def test_opencode_test_chat_edit_json_and_stream_share_local_proxy(self):
+        self.activate()
+        reply = json.dumps({'type': 'text', 'part': {'text': '{}'}})
+        with patch.object(cli_llm, 'resolve', return_value='/fake/opencode'), \
+             patch.object(opencode_proxy, 'request', AsyncMock(return_value=(0, reply, ''))) as proxy:
+            tested = self.client.post('/api/v1/system/cli/test', json={
+                'provider': 'opencode', 'path': '/test/cli', 'model': 'local/example#precise'})
+            self.assertTrue(tested.json()['ok'])
+            chat = self.client.post('/api/v1/chat', json={'messages': [{'role': 'user', 'content': 'Question'}]})
+            self.assertIn('[DONE]', chat.text)
+            edited = self.client.post('/api/v1/edit', json={'selected_text': 'Old', 'instruction': 'Edit'})
+            self.assertEqual(edited.json(), {'edited_text': '{}'})
+            async def generate():
+                self.assertEqual(await llm.complete_json([{'role': 'user', 'content': 'Generate JSON'}]), {})
+                self.assertEqual(await llm.complete_text('Generate text'), '{}')
+                chunks = [chunk async for chunk in llm.stream_chat([{'role': 'user', 'content': 'Stream'}])]
+                self.assertIn('{}', ''.join(chunks))
+            asyncio.run(generate())
+            self.assertEqual(proxy.await_count, 6)
+            for call in proxy.await_args_list:
+                self.assertEqual(call.args[:2], ('/fake/opencode', 'local/example#precise'))
+                self.assertIn('Conversation messages (ordered JSON):', call.args[2])
+                self.assertIs(call.kwargs['run'], cli_llm.run)
+
     def test_direct_api_chat_keeps_selected_http_provider_without_fallback(self):
         async def fail_selected(*args, **kwargs):
             raise llm.LLMError('Selected API unavailable')
@@ -198,7 +222,9 @@ class CLIAPITests(unittest.TestCase):
         meeting = self.client.post('/api/v1/meetings/create', json={'title': 'Test', 'transcript_text': 'Решили продолжить работу.'}).json()['id']
         # {} satisfies the existing empty protocol/summary schema. The actual
         # pipelines still call llm.complete_json, including their translations.
-        with patch.object(cli_llm, 'complete', AsyncMock(return_value='{}')) as call, \
+        reply = json.dumps({'type': 'text', 'part': {'text': '{}'}})
+        with patch.object(cli_llm, 'resolve', return_value='/fake/opencode'), \
+             patch.object(opencode_proxy, 'request', AsyncMock(return_value=(0, reply, ''))) as call, \
              patch.object(server.indexer, 'index_meeting', AsyncMock()):
             response = self.client.post(f'/api/v1/meetings/{meeting}/generate')
             self.assertEqual(response.status_code, 200)
@@ -209,7 +235,8 @@ class CLIAPITests(unittest.TestCase):
         from docx import Document
         document = Document(); document.add_paragraph('{{ meeting_title }}')
         content = io.BytesIO(); document.save(content)
-        with patch.object(cli_llm, 'complete', AsyncMock(return_value='{}')) as call:
+        with patch.object(cli_llm, 'resolve', return_value='/fake/opencode'), \
+             patch.object(opencode_proxy, 'request', AsyncMock(return_value=(0, reply, ''))) as call:
             response = self.client.post('/api/v1/templates/upload', data={'name': 'CLI template'}, files={'file': ('template.docx', content.getvalue())})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertGreaterEqual(call.await_count, 1)

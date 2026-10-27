@@ -17,8 +17,9 @@ import signal
 import tempfile
 import time
 import urllib.parse
-import uuid
 import weakref
+
+from . import opencode_proxy
 
 PROVIDERS = ('opencode', 'codex', 'claude', 'antigravity')
 BINARIES = dict(zip(PROVIDERS, ('opencode', 'codex', 'claude', 'agy')))
@@ -133,6 +134,10 @@ async def run(argv: list[str], *, cwd: str, env=None, stdin: str = '', timeout=D
 
 @contextmanager
 def workspace(provider: str):
+    if provider == 'opencode':
+        with opencode_proxy.workspace() as location:
+            yield location
+        return
     with tempfile.TemporaryDirectory(prefix='steppe-cli-') as folder:
         env = os.environ.copy()
         # Keep login and provider env. Remove only inherited session identities.
@@ -141,23 +146,6 @@ def workspace(provider: str):
             env.pop(key, None)
         # OpenCode's run command prefers PWD over process.cwd().
         env.update(NO_COLOR='1', TERM='dumb', PWD=str(Path(folder).resolve()))
-        if provider == 'opencode':
-            env['OPENCODE_CONFIG_CONTENT'] = json.dumps({
-                'policies': [{'action': 'tool.use', 'resource': '*', 'effect': 'deny'}],
-                'permissions': [{'action': '*', 'resource': '*', 'effect': 'deny'}],
-                'plugins': ['-*', 'opencode.*', '-opencode.tool.*', '-opencode.browser',
-                            '-opencode.skill', '-opencode.config.mcp', '-opencode.warming'],
-                'warming': False, 'share': 'disabled',
-                'instructions': [], 'lsp': False, 'formatter': False,
-                'agents': {'steppe': {'mode': 'primary', 'system': 'Answer using only supplied messages. Never use tools.',
-                                      'permissions': [{'action': '*', 'resource': '*', 'effect': 'deny'}]}},
-            })
-            # The CLI's service reads project configuration, not the client's
-            # environment overrides. Scope restrictions to this temporary location.
-            Path(folder, 'opencode.json').write_text(env['OPENCODE_CONFIG_CONTENT'])
-            env.pop('OPENCODE_DISABLE_PROJECT_CONFIG', None)
-            env.update(OPENCODE_DISABLE_AUTOUPDATE='1',
-                       OPENCODE_DISABLE_CLAUDE_CODE='1', OPENCODE_DISABLE_CLAUDE_CODE_SKILLS='1')
         if provider == 'antigravity':
             agent_dir = Path(folder) / '.agents/agents'
             agent_dir.mkdir(parents=True)
@@ -170,7 +158,7 @@ def workspace(provider: str):
 
 def command(provider, binary, model=''):
     if provider == 'opencode':
-        args = [binary, 'run', '--format', 'json', '--agent', 'steppe', '--model', model]
+        args = opencode_proxy.command(binary, model)
     elif provider == 'codex':
         args = [binary, '-a', 'never', 'exec', '--sandbox', 'read-only', '--skip-git-repo-check',
                 '--ephemeral', '--json', '--color', 'never',
@@ -272,19 +260,11 @@ async def complete(provider, path, model, messages, *, json_mode=False, timeout=
     text = prompt(messages, json_mode)
     if provider == 'antigravity':
         text = json.dumps({'event': 'user', 'message': {'content': text}}, ensure_ascii=False) + '\n'
-    with workspace(provider) as (folder, env):
-        argv = command(provider, binary, model)
-        session_id = 'ses_' + uuid.uuid4().hex[:26] if provider == 'opencode' else None
-        if session_id:
-            argv += ['--session', session_id]
-        try:
-            code, stdout, _ = await run(argv, cwd=folder, env=env, stdin=text, timeout=timeout)
-        finally:
-            if session_id:
-                # v2 CLI uses its local service. Killing the client alone can
-                # leave a remote turn running; interrupt and remove only the
-                # unique session created by this request, including on cancel.
-                await asyncio.shield(_cleanup_opencode(binary, session_id, folder, env))
+    if provider == 'opencode':
+        code, stdout, _ = await opencode_proxy.request(binary, model, text, run=run, timeout=timeout)
+    else:
+        with workspace(provider) as (folder, env):
+            code, stdout, _ = await run(command(provider, binary, model), cwd=folder, env=env, stdin=text, timeout=timeout)
     if code and provider == 'opencode':
         # Structured failure categories are safe; raw messages may echo prompts.
         parse_reply(provider, stdout)
@@ -292,17 +272,6 @@ async def complete(provider, path, model, messages, *, json_mode=False, timeout=
         # Never reflect inference stderr: it can contain the full transcript.
         raise CLIError(f'{BINARIES[provider]} завершился с кодом {code}. Проверьте вход, модель и настройки CLI в терминале.')
     return parse_reply(provider, stdout)
-
-
-async def _cleanup_opencode(binary, session_id, folder, env):
-    for method, suffix in [('POST', '/interrupt'), ('DELETE', '')]:
-        try:
-            await run([binary, 'api', method, f'/api/session/{session_id}{suffix}'],
-                      cwd=folder, env=env, timeout=5)
-        except (CLIError, OSError):
-            # The request may have failed before session creation. Cleanup
-            # never masks its original error or launches another model request.
-            pass
 
 
 def parse_models(provider, output):

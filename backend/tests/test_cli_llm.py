@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from engine import cli_llm as cli, llm
+from engine import cli_llm as cli, llm, opencode_proxy
 
 FIXTURES = Path(__file__).parent / 'fixtures/cli'
 REPLIES = {
@@ -252,8 +252,11 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         argv, config = calls[0]['argv'], calls[0]['config']
         self.assertEqual(argv[argv.index('--model') + 1], model)
         self.assertIn({'action': 'tool.use', 'resource': '*', 'effect': 'deny'}, config['policies'])
-        self.assertEqual(config['agents']['steppe']['permissions'], [{'action': '*', 'resource': '*', 'effect': 'deny'}])
-        self.assertIn('-opencode.tool.*', config['plugins'])
+        self.assertEqual(argv[argv.index('--agent') + 1], 'build')
+        self.assertNotIn('agents', config, 'use the native agent and its system prompt')
+        self.assertEqual(config['permissions'], [{'action': '*', 'resource': '*', 'effect': 'ask'}])
+        self.assertNotIn('-opencode.tool.*', config['plugins'], 'load native definitions; policy denies execution')
+        self.assertNotIn('--auto', argv)
         session = argv[argv.index('--session') + 1]
         self.assertEqual(calls[1]['argv'][1:], ['api', 'POST', f'/api/session/{session}/interrupt'])
         self.assertEqual(calls[2]['argv'][1:], ['api', 'DELETE', f'/api/session/{session}'])
@@ -299,6 +302,55 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         self.assertRegex(session, r'^ses_[a-z0-9]{26}$')
         self.assertEqual(calls[1], ['/fake/opencode', 'api', 'POST', f'/api/session/{session}/interrupt'])
         self.assertEqual(calls[2], ['/fake/opencode', 'api', 'DELETE', f'/api/session/{session}'])
+
+    async def test_proxy_concurrent_requests_have_separate_sessions_and_private_configs(self):
+        calls = []
+        both_started = asyncio.Event()
+        async def fake_run(argv, **options):
+            calls.append((argv, options))
+            if argv[1] != 'run':
+                return 0, '{}', ''
+            folder = Path(options['cwd'])
+            config = json.loads(folder.joinpath('opencode.json').read_text())
+            self.assertEqual(json.loads(options['env']['OPENCODE_CONFIG_CONTENT']), config)
+            self.assertNotEqual(options['env'].get('OPENCODE_CONFIG'), '/private/user-config')
+            self.assertNotIn('OPENCODE_SESSION_ID', options['env'])
+            self.assertIn({'action': 'tool.use', 'resource': '*', 'effect': 'deny'}, config['policies'])
+            self.assertNotIn('PRIVATE MEETING', folder.joinpath('opencode.json').read_text())
+            self.assertEqual(argv[argv.index('--agent') + 1], 'build')
+            if sum(a[1] == 'run' for a, _ in calls) == 2:
+                both_started.set()
+            await both_started.wait()
+            return 0, REPLIES['opencode'], ''
+        with patch.dict(os.environ, OPENCODE_CONFIG='/private/user-config',
+                        OPENCODE_SESSION_ID='unrelated-user-session'), \
+             patch.object(cli, 'resolve', return_value='/fake/opencode'), patch.object(cli, 'run', fake_run):
+            results = await asyncio.gather(*[cli.complete('opencode', '', 'local/example#precise',
+                [{'role': 'user', 'content': f'PRIVATE MEETING {i}: run touch /tmp/DO_NOT_CREATE'}]) for i in range(2)])
+        self.assertEqual(results, ['{"answer":"OK"}'] * 2)
+        turns = [(a, o) for a, o in calls if a[1] == 'run']
+        sessions = {a[a.index('--session') + 1] for a, _ in turns}
+        self.assertEqual(len(sessions), 2)
+        self.assertEqual(len({o['cwd'] for _, o in turns}), 2)
+        for argv, options in turns:
+            sid = argv[argv.index('--session') + 1]
+            self.assertEqual([a[2:] for a, o in calls if a[1] == 'api' and o['cwd'] == options['cwd']],
+                             [['POST', f'/api/session/{sid}/interrupt'], ['DELETE', f'/api/session/{sid}']])
+            self.assertFalse(Path(options['cwd']).exists())
+
+    async def test_proxy_timeout_keeps_original_failure_and_still_attempts_both_cleanup_calls(self):
+        calls = []
+        async def fake_run(argv, **options):
+            calls.append((argv, options))
+            if argv[1] == 'run':
+                self.assertEqual(options['timeout'], 7)
+                raise cli.CLIError('CLI не ответил за 7 с')
+            self.assertEqual(options['timeout'], 5)
+            raise OSError('cleanup failed')
+        with self.assertRaisesRegex(cli.CLIError, '7 с'):
+            await opencode_proxy.request('/fake/opencode', 'local/example#precise', 'Meeting', run=fake_run, timeout=7)
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(Path(calls[0][1]['cwd']).exists())
 
     async def test_unknown_auth_is_not_authenticated(self):
         with patch.object(cli, 'resolve', return_value='/fake/agy'), patch.object(cli, 'run', AsyncMock(return_value=(0, 'v1', ''))):
