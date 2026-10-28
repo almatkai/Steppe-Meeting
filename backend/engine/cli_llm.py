@@ -82,15 +82,22 @@ async def _terminate(process):
     # Always signal the group, including after its leader exits: children may
     # still hold our pipes. Never use a global kill-by-name.
     if os.name == 'posix':
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        await asyncio.sleep(.1)
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(process.pid, sig)
+            except ProcessLookupError:
+                pass
+            except PermissionError as error:
+                # macOS can deny a signal while an exited group is being
+                # reaped. Only suppress this after our own process handle
+                # confirms completion; never probe or signal other PIDs.
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=.2)
+                except TimeoutError:
+                    raise error
+                return
+            if sig == signal.SIGTERM:
+                await asyncio.sleep(.1)
     elif process.returncode is None:
         process.kill()
     await process.wait()

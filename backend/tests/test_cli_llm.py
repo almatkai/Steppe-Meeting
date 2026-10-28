@@ -7,6 +7,7 @@ import signal
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -211,6 +212,25 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancellation_kills_descendants(self):
         await self.child_cleanup(True)
+
+    async def test_exited_owned_process_cleanup_does_not_mask_original_error(self):
+        for denied_signal in (signal.SIGTERM, signal.SIGKILL):
+            process = SimpleNamespace(pid=123456, wait=AsyncMock(return_value=0))
+            def signal_group(pid, sig):
+                if sig == denied_signal:
+                    raise PermissionError("exited group")
+            with patch.object(cli.os, "killpg", side_effect=signal_group):
+                await cli._terminate(process)
+            process.wait.assert_awaited()
+
+    async def test_permission_denial_for_running_owned_process_is_not_hidden(self):
+        async def still_running():
+            await asyncio.sleep(60)
+        process = SimpleNamespace(pid=123456, wait=still_running)
+        with patch.object(cli.os, "killpg", side_effect=PermissionError("active group")) as send:
+            with self.assertRaises(PermissionError):
+                await cli._terminate(process)
+        send.assert_called_once_with(process.pid, signal.SIGTERM)
 
     async def test_output_is_bounded_and_inference_stderr_is_not_reflected(self):
         binary = self.executable('print("x"*10000)\n')
