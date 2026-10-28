@@ -7,6 +7,7 @@ import base64
 import os
 from pathlib import Path
 import queue
+import socketserver
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -107,7 +108,16 @@ class Handler(BaseHTTPRequestHandler):
         record('request', method='DELETE', path=self.path)
         self.reply(None, 500 if MODE == 'cleanup-error' else 204)
 
+class LoopbackServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind does a reverse DNS lookup for server_name.
+        # This offline fixture needs only its numeric loopback address; macOS
+        # CI DNS can stall for 35 seconds before the listener becomes usable.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
+
+
 port = int(next(a.split('=')[1] for a in sys.argv if a.startswith('--port=')))
-server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+server = LoopbackServer(('127.0.0.1', port), Handler)
 server.daemon_threads = True
 server.serve_forever()
