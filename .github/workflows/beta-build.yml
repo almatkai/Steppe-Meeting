@@ -1,0 +1,80 @@
+name: Build macOS beta
+
+on:
+  push:
+    branches: [feat/cli-providers-monochrome-icon]
+    paths:
+      - '.github/workflows/beta-build.yml'
+      - 'backend/**'
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'DISTRIBUTION.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: beta-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-beta:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Prepare build tools
+        run: |
+          test "$(uname -m)" = arm64
+          npm install --global pnpm@9.15.9
+          pnpm install --frozen-lockfile
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt
+      - name: Test source and packaging
+        run: |
+          python3 -m venv build/test-env
+          build/test-env/bin/python -m pip install --require-hashes -r backend/requirements-macos-arm64.lock
+          build/test-env/bin/python -m unittest discover -s backend/tests -v
+          build/test-env/bin/python -m unittest discover -s tests -p 'test_*.py' -v
+          node --experimental-strip-types --test tests/*.test.mjs
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - name: Build and verify distributable beta
+        run: python3 scripts/build-beta.py
+      - name: Test native backend lifecycle
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib backend::tests --locked
+      - name: Upload verified beta files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: steppe-beta-aarch64
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          path: |
+            build/release-0.2.0-beta.1-aarch64/*.dmg
+            build/release-0.2.0-beta.1-aarch64/SHA256SUMS
+            build/release-0.2.0-beta.1-aarch64/*.json
+            build/release-0.2.0-beta.1-aarch64/DISTRIBUTION.md
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: steppe-beta-build-logs
+          if-no-files-found: ignore
+          retention-days: 7
+          path: build/*.log

@@ -2,6 +2,58 @@
 set -euo pipefail
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+
+# Release resources are self-contained. Extract portable CPython into user data;
+# never run pip, write bytecode, or create a venv inside the signed .app.
+if [ -f "$DIR/../runtime/manifest.json" ]; then
+    RESOURCES="$(cd "$DIR/../runtime" && pwd)"
+    export PATH="$RESOURCES:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    export PYTHONDONTWRITEBYTECODE=1
+    unset PYTHONHOME PYTHONPATH
+    RUNTIME_ID="$(/usr/bin/shasum -a 256 "$RESOURCES/manifest.json" | /usr/bin/cut -c1-20)"
+    RUNTIME_DIR="${STEPPE_DATA_DIR:-$HOME/Library/Application Support/Steppe Meeting}/runtime/$RUNTIME_ID"
+    /bin/mkdir -p "$RUNTIME_DIR"
+    if [ ! -x "$RUNTIME_DIR/python/bin/python3" ]; then
+        # mkdir acts as a bounded cross-process extraction lock.
+        LOCK="$RUNTIME_DIR/.extract-lock"
+        for ((attempt=0; attempt<30; attempt++)); do
+            if /bin/mkdir "$LOCK" 2>/dev/null; then break; fi
+            owner="$(/bin/cat "$LOCK/pid" 2>/dev/null || true)"
+            case "$owner" in
+                ''|*[!0-9]*) ;;
+                *) if ! kill -0 "$owner" 2>/dev/null; then
+                       /bin/rm -f "$LOCK/pid"
+                       /bin/rmdir "$LOCK" 2>/dev/null || true
+                   fi ;;
+            esac
+            /bin/sleep 1
+        done
+        if [ "$attempt" -eq 30 ]; then
+            echo "Встроенный Python занят подготовкой. Повторите запуск через минуту; см. backend.log." >&2
+            exit 1
+        fi
+        printf '%s\n' "$$" > "$LOCK/pid"
+        TEMP_RUNTIME="$(/usr/bin/mktemp -d "$RUNTIME_DIR/.extract.XXXXXX")"
+        trap '/bin/rm -rf "$TEMP_RUNTIME"; /bin/rm -f "$LOCK/pid"; /bin/rmdir "$LOCK" 2>/dev/null || true' EXIT
+        if [ ! -x "$RUNTIME_DIR/python/bin/python3" ]; then
+            /usr/bin/tar -xzf "$RESOURCES/python.tar.gz" -C "$TEMP_RUNTIME"
+            /bin/mv "$TEMP_RUNTIME/python" "$RUNTIME_DIR/python"
+        fi
+        /bin/rm -rf "$TEMP_RUNTIME"
+        /bin/rm -f "$LOCK/pid"
+        /bin/rmdir "$LOCK"
+        trap - EXIT
+    fi
+    cd /
+    exec "$RUNTIME_DIR/python/bin/python3" "$DIR/bundled_runtime.py" "$RESOURCES" "$RUNTIME_DIR" "$DIR"
+fi
+
+# A production bundle with incomplete resources must fail instead of silently
+# borrowing a checkout or requiring a user to install development tools.
+if [ -d "$DIR/../MacOS" ] || [ -d "$DIR/../../MacOS" ]; then
+    echo "Отсутствует встроенный Python runtime. Установите полную сборку Steppe Meeting заново." >&2
+    exit 1
+fi
 # Finder does not inherit a terminal's PATH. Keep package tools discoverable for
 # both initial setup and the model-specific STT installer inside Python.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -9,13 +61,7 @@ if [ -n "${TMPDIR:-}" ] && [ ! -d "$TMPDIR" ]; then
     unset TMPDIR
 fi
 
-# A bundled app is read-only. Reuse the checkout's environment when available;
-# otherwise keep its Python environment alongside the user's application data.
-if [ -d "$DIR/.venv" ] || [ ! -d "$DIR/../MacOS" -a ! -d "$DIR/../../MacOS" ]; then
-    ENV_DIR="$DIR/.venv"
-else
-    ENV_DIR="${STEPPE_DATA_DIR:-$HOME/Library/Application Support/Steppe Meeting}/runtime/.venv"
-fi
+ENV_DIR="$DIR/.venv"
 PYTHON="$ENV_DIR/bin/python"
 if [ ! -x "$PYTHON" ]; then
     if ! command -v uv >/dev/null 2>&1; then

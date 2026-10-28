@@ -1,5 +1,7 @@
 //! Own only the backend process started by this application. An existing server
 //! is reusable only when its health endpoint identifies the same backend source.
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
@@ -14,6 +16,34 @@ use std::{
 };
 use tauri::Manager;
 
+fn stop_owned(child: &mut Child) {
+    // The launcher and setup subprocesses have their own process group. Never
+    // signal a reused server or the application's process group.
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::kill(-(child.id() as i32), libc::SIGTERM);
+        }
+        // Let FastAPI cancel its generation jobs and clean up their separate
+        // CLI process groups before escalating a stuck launcher/backend.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        unsafe {
+            libc::kill(-(child.id() as i32), libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[derive(Default)]
 pub struct BackendState {
     child: Mutex<Option<Child>>,
@@ -25,26 +55,28 @@ impl BackendState {
         self.stopping.store(true, Ordering::SeqCst);
         if let Ok(mut owned) = self.child.lock() {
             if let Some(mut child) = owned.take() {
-                let _ = child.kill();
-                let _ = child.wait();
+                stop_owned(&mut child);
             }
         }
     }
 }
 
 fn backend_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../backend");
-    let directory = if source.join("desktop_server.py").is_file() {
-        source
-    } else {
-        app.path()
-            .resource_dir()
-            .map_err(|e| e.to_string())?
-            .join("backend")
-    };
+    let resources = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let directory = select_backend_dir(&resources, cfg!(debug_assertions));
     directory.canonicalize().map_err(|_| {
         "Не найдены файлы локального сервера. Пересоберите приложение через ./run_app.sh.".into()
     })
+}
+
+fn select_backend_dir(resources: &Path, development: bool) -> PathBuf {
+    if development {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../backend");
+        if source.join("desktop_server.py").is_file() {
+            return source;
+        }
+    }
+    resources.join("backend")
 }
 
 fn health(expected: &Path) -> Result<bool, String> {
@@ -66,16 +98,22 @@ fn health(expected: &Path) -> Result<bool, String> {
             if headers.starts_with("HTTP/1.1 200") || headers.starts_with("HTTP/1.0 200") {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
                     if value["service"] == "steppe-meeting" {
-                        if value["backend_dir"].as_str().map(Path::new) == Some(expected) {
+                        if compatible_identity(&value, expected, cfg!(debug_assertions)) {
                             return Ok(true);
                         }
-                        return Err("На порту 8008 работает Steppe Meeting из другого checkout. Остановите тот сервер и повторите подключение.".into());
+                        return Err("На порту 8008 работает другая копия Steppe Meeting. Закройте её и повторите подключение.".into());
                     }
                 }
             }
         }
     }
     Err("Порт 8008 занят сервером без совместимой проверки готовности. Остановите старый сервер и повторите подключение.".into())
+}
+
+fn compatible_identity(value: &serde_json::Value, expected: &Path, development: bool) -> bool {
+    value["backend_dir"].as_str().map(Path::new) == Some(expected)
+        && (development
+            || (value["app_version"] == env!("CARGO_PKG_VERSION") && value["runtime"] == "bundled"))
 }
 
 fn start(app: tauri::AppHandle) -> Result<(), String> {
@@ -86,8 +124,7 @@ fn start(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     if let Some(mut child) = owned.take() {
-        let _ = child.kill();
-        let _ = child.wait();
+        stop_owned(&mut child);
     }
     let logs = app.path().app_log_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
@@ -98,8 +135,12 @@ fn start(app: tauri::AppHandle) -> Result<(), String> {
         .open(&log_path)
         .map_err(|e| e.to_string())?;
     let stderr = log.try_clone().map_err(|e| e.to_string())?;
-    let mut child = Command::new("/bin/bash")
+    let mut command = Command::new("/bin/bash");
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
         .arg(directory.join("run_backend.sh"))
+        .env("STEPPE_APP_VERSION", env!("CARGO_PKG_VERSION"))
         // The script resolves its own directory. Start from a stable system
         // directory so shell initialization need not resolve a Desktop path.
         .current_dir("/")
@@ -111,11 +152,11 @@ fn start(app: tauri::AppHandle) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         if state.stopping.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_owned(&mut child);
             return Err("Приложение завершает работу.".into());
         }
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            stop_owned(&mut child);
             return Err(format!(
                 "Локальный сервер завершился ({status}). Подробности: {}",
                 log_path.display()
@@ -128,17 +169,70 @@ fn start(app: tauri::AppHandle) -> Result<(), String> {
             }
             Ok(false) => {}
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                stop_owned(&mut child);
                 return Err(error);
             }
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_owned(&mut child);
             return Err(format!("Локальный сервер не запустился за 120 секунд. Повторите подключение. Подробности: {}", log_path.display()));
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_backend_gets_time_for_graceful_cleanup() {
+        use std::io::{BufRead, BufReader};
+        let mut child = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "trap 'exit 0' TERM; printf 'ready\\n'; while :; do sleep 1; done",
+            ])
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        stop_owned(&mut child);
+        assert!(child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn production_uses_resources_even_when_checkout_exists() {
+        let resources = Path::new("/Applications/Steppe Meeting.app/Contents/Resources");
+        assert_eq!(
+            select_backend_dir(resources, false),
+            resources.join("backend")
+        );
+        assert!(select_backend_dir(resources, true)
+            .join("desktop_server.py")
+            .is_file());
+    }
+
+    #[test]
+    fn production_rejects_previous_version_and_development_runtime() {
+        let expected = Path::new("/Example.app/Contents/Resources/backend");
+        let mut identity = serde_json::json!({
+            "backend_dir": expected, "app_version": env!("CARGO_PKG_VERSION"), "runtime": "bundled"
+        });
+        assert!(compatible_identity(&identity, expected, false));
+        identity["runtime"] = "development".into();
+        assert!(!compatible_identity(&identity, expected, false));
+        identity["runtime"] = "bundled".into();
+        identity["app_version"] = "0.1.0".into();
+        assert!(!compatible_identity(&identity, expected, false));
+        assert!(compatible_identity(&identity, expected, true));
+        assert!(!compatible_identity(&identity, Path::new("/other"), true));
     }
 }
 

@@ -52,3 +52,6 @@ venv/
 .idea/
 *.swp
 *.swo
+
+# Prepared distributable runtimes and local release artifacts
+/build/

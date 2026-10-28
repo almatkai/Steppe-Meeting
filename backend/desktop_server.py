@@ -2231,7 +2231,9 @@ async def system_save_url_to_downloads(req: SaveFileUrlRequest):
 @app.get("/api/v1/system/health")
 async def backend_health():
     # Readiness is independent of Ollama, STT dependencies and downloaded models.
-    return {"service": "steppe-meeting", "backend_dir": str(BASE_DIR), "pid": os.getpid()}
+    return {"service": "steppe-meeting", "backend_dir": str(BASE_DIR), "pid": os.getpid(),
+            "app_version": os.environ.get("STEPPE_APP_VERSION", "development"),
+            "runtime": "bundled" if os.environ.get("STEPPE_BUNDLED_RUNTIME") == "1" else "development"}
 
 
 @app.get("/api/v1/system/status")

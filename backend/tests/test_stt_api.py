@@ -29,6 +29,12 @@ class STTAPITests(unittest.TestCase):
         self.assertEqual(response.json()["backend_dir"], str(server.BASE_DIR))
         self.assertEqual(response.json()["pid"], os.getpid())
 
+    def test_health_identifies_bundled_version_without_ai_probe(self):
+        with patch.dict(os.environ, STEPPE_APP_VERSION="0.2.0-beta.1", STEPPE_BUNDLED_RUNTIME="1"):
+            response = self.client.get("/api/v1/system/health")
+        self.assertEqual(response.json()["app_version"], "0.2.0-beta.1")
+        self.assertEqual(response.json()["runtime"], "bundled")
+
     def test_installer_targets_requested_model(self):
         with patch.object(server.whisper_service, "start_install_env", return_value={"status": "started"}) as installer:
             response = self.client.post("/api/v1/system/whisper/install-env", json={"model": "wav2vec2-rukk"})
