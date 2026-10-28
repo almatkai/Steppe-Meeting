@@ -105,7 +105,7 @@ def audit(app, stamp):
     assert json.loads((resources / "build-info.json").read_text()) == stamp
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
     assert info["CFBundleShortVersionString"] == stamp["version"], info
-    run(["/usr/bin/lipo", "-verify_arch", "arm64", app / "Contents/MacOS/steppe-desktop"])
+    run(["/usr/bin/lipo", app / "Contents/MacOS/steppe-desktop", "-verify_arch", "arm64"])
     run(["/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", app])
     return {str(p.relative_to(app)): sha(p) for p in sorted(app.rglob("*")) if p.is_file()}
 
