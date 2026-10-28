@@ -228,6 +228,43 @@ class LocalSTTTests(unittest.TestCase):
         self.assertEqual(model.transcribe.call_args.kwargs["language"], "kk")
         self.assertEqual(result["segments"][0]["text"], "hello")
 
+    def test_whisper_model_profile_controls_tail_context_offline_and_streaming(self):
+        audio = Path(self.temp.name) / "audio.wav"
+        audio.touch()
+        first = SimpleNamespace(start=5.0, end=74.0, text=" initial speech ")
+        tail = SimpleNamespace(start=74.0, end=81.0, text=" final speech ")
+
+        def recognize(_path, **options):
+            # Synthetic reproduction of a later window suppressed by prior text.
+            segments = [first] if options.get("condition_on_previous_text", True) else [first, tail]
+            return iter(segments), SimpleNamespace(duration=82.0, language="ru")
+
+        for name, info in STT_MODELS_CATALOG.items():
+            if info["engine"] != "faster-whisper":
+                continue
+            for streaming in (False, True):
+                with self.subTest(model=name, streaming=streaming):
+                    model = MagicMock()
+                    model.transcribe.side_effect = recognize
+                    with patch.object(service, "get_cached_model", return_value=model) as load:
+                        result = service.transcribe_local(str(audio), name, streaming=streaming)
+                    load.assert_called_once_with(name, "auto")
+                    conditioned = name != "whisper-turbo-kaz-rus-v1"
+                    self.assertEqual(len(result["segments"]), 1 if conditioned else 2)
+                    self.assertEqual(result["segments"][0]["text"], "initial speech")
+                    self.assertEqual(result["duration"], 82.0)
+                    if not conditioned:
+                        self.assertEqual(result["segments"][-1]["text"], "final speech")
+                        self.assertEqual(result["segments"][-1]["timestamp_end"], 81.0)
+                    model.transcribe.assert_called_once()
+                    self.assertEqual(model.transcribe.call_args.args, (str(audio),))
+                    options = dict(model.transcribe.call_args.kwargs)
+                    self.assertEqual(options.pop("condition_on_previous_text", True), conditioned)
+                    self.assertEqual(options, {
+                        "language": None, "beam_size": 1 if streaming else 5,
+                        "vad_filter": True, "vad_parameters": {"min_silence_duration_ms": 500},
+                    })
+
     def test_formatting_does_not_invent_multiple_speakers(self):
         result = local_stt.format_result([(0, 1, "one"), (3661, 3662, "two")], 3700, "en")
         self.assertEqual({s["speaker"] for s in result["segments"]}, {"Спикер 1"})

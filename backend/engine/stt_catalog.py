@@ -84,6 +84,10 @@ STT_MODELS_CATALOG["whisper-turbo-kaz-rus-v1"] = {
     "description": "abilmansplus: LoRA объединяется с базовой моделью и конвертируется в INT8. Первая установка требует ~5 ГБ свободного диска и дополнительной памяти",
     "recommended": False, "engine": "faster-whisper", "languages": ["kk", "ru", "en"],
     "streaming": "chunked", "download_kind": "whisper-lora",
+    # Prior-text conditioning suppressed a real final speech window in a local
+    # replay; fresh context recovered it. Keep this mitigation model-specific:
+    # evidence from one recording does not establish general wording accuracy.
+    "transcription_options": {"condition_on_previous_text": False},
     "source_url": "https://huggingface.co/abilmansplus/whisper-turbo-kaz-rus-v1",
     "repo_id": "abilmansplus/whisper-turbo-kaz-rus-v1",
     "revision": "904d5d22339952909001d1abcbc1ecf29d26d706",

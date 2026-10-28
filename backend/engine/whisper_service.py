@@ -345,6 +345,7 @@ def transcribe_local(audio_path: str, model_name: str = "small", device: str = "
             segments_iter, metadata = model.transcribe(
                 audio_path, language=local_stt.normalize_language(language), beam_size=1 if streaming else 5,
                 vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500),
+                condition_on_previous_text=info.get("transcription_options", {}).get("condition_on_previous_text", True),
             )
             segments = [(float(s.start or 0), float(s.end or 0), s.text.strip()) for s in segments_iter]
             duration = float(metadata.duration or 0)
