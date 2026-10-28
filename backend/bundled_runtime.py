@@ -32,7 +32,7 @@ def prepare(resources: Path, root: Path) -> Path:
     python = root / ".venv/bin/python"
     stamp = root / ".core-ready"
     fingerprint = hashlib.sha256((resources / "requirements.lock").read_bytes()).hexdigest()
-    probe = "import fastapi, uvicorn, pydantic_settings, multipart, httpx, semver, docx, docxtpl, backoff, lxml, PIL"
+    probe = "import fastapi, uvicorn, pydantic_settings, multipart, httpx, semver, docx, docxtpl, backoff, lxml, PIL, reportlab"
     with (root / ".setup.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         ready = python.exists() and stamp.exists() and stamp.read_text().strip() == fingerprint

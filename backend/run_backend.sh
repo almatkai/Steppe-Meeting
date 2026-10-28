@@ -75,7 +75,7 @@ fi
 # package index on subsequent launches, while the import probe repairs damage.
 FINGERPRINT="$(shasum -a 256 "$DIR/requirements.txt" | cut -d ' ' -f 1)"
 STAMP="$ENV_DIR/.steppe-requirements"
-if [ "$(cat "$STAMP" 2>/dev/null || true)" != "$FINGERPRINT" ] || ! "$PYTHON" -c 'import fastapi, uvicorn, pydantic_settings, multipart, httpx, docx, docxtpl, backoff, lxml, PIL' >/dev/null 2>&1; then
+if [ "$(cat "$STAMP" 2>/dev/null || true)" != "$FINGERPRINT" ] || ! "$PYTHON" -c 'import fastapi, uvicorn, pydantic_settings, multipart, httpx, docx, docxtpl, backoff, lxml, PIL, reportlab' >/dev/null 2>&1; then
     if command -v uv >/dev/null 2>&1; then
         uv pip install -r "$DIR/requirements.txt" --python "$PYTHON"
     else
