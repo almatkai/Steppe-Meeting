@@ -4,7 +4,7 @@ Target: Apple Silicon (`arm64` / `aarch64`), macOS 15 or later. Intel builds are
 
 ## Build and verify
 
-Build prerequisites: Node, project dependencies installed with `pnpm install --frozen-lockfile`, Rust stable, Xcode command-line tools, and Python 3 with pip. These are developer prerequisites; recipients do not need them.
+Build prerequisites: Node, project dependencies installed with `pnpm install --frozen-lockfile`, Rust stable, Xcode 26.3 with the macOS 26.2 SDK selected, and Python 3 with pip. The native Metal dependency uses newer SDK declarations behind runtime availability guards; the app's minimum deployment target remains macOS 15. These are developer prerequisites; recipients do not need them. CI selects Xcode through `DEVELOPER_DIR`.
 
 ```sh
 python3 scripts/build-beta.py
