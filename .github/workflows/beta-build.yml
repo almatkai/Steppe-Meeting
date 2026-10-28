@@ -51,6 +51,9 @@ jobs:
         run: |
           python3 -m venv build/test-env
           build/test-env/bin/python -m pip install --require-hashes -r backend/requirements-macos-arm64.lock
+          # Regression tests mock inference/downloads but import these APIs.
+          # These test-only packages are never included in the core wheel bundle.
+          build/test-env/bin/python -m pip install numpy==2.5.3 faster-whisper==1.2.1 huggingface-hub==0.36.2
           build/test-env/bin/python -m unittest discover -s backend/tests -v
           build/test-env/bin/python -m unittest discover -s tests -p 'test_*.py' -v
           node --experimental-strip-types --test tests/*.test.mjs
