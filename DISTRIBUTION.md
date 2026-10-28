@@ -1,4 +1,4 @@
-# Steppe Meeting 0.2.0-beta.1 — local beta distribution
+# Steppe Meeting 0.2.0-beta.1 — beta distribution
 
 Target: Apple Silicon (`arm64` / `aarch64`), macOS 15 or later. Intel builds are not produced by this packaging configuration.
 
@@ -14,7 +14,7 @@ This prepares pinned official runtime downloads and hash-checked PyPI wheels, bu
 
 The script applies `src-tauri/tauri.beta.conf.json` on top of the standard Tauri configuration. Runtime resources are scoped to this release overlay so `tauri dev` does not require downloading portable runtime inputs. A raw `tauri build` without this overlay is not the distributable beta workflow.
 
-Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. Expected outputs:
+Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests and native backend lifecycle tests to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
 
 ```text
 build/release-0.2.0-beta.1-aarch64/
@@ -27,6 +27,8 @@ build/release-0.2.0-beta.1-aarch64/
 ```
 
 The `aarch64` token lets the beta update tracker identify the DMG. `build-info.json` records the Git HEAD, hashes of production source inputs, exact frontend assets and the runtime manifest, including uncommitted source changes. Build and test logs remain under `build/`. The app bundle directory has a per-file SHA-256 manifest; the DMG has the single-file checksum in `SHA256SUMS`.
+
+The CI download contains the DMG, both JSON manifests, `SHA256SUMS` and this document. Before publication, check that `build-info.json` identifies the approved final commit and verify the downloaded DMG against `SHA256SUMS`. Keep the successful run URL with the release review. Downloading and checking a CI artifact locally does not establish local native UI or Quit verification.
 
 Additional checks, using an existing development environment:
 
@@ -61,4 +63,4 @@ Once reviewed and approved for sharing, send the versioned DMG with `SHA256SUMS`
 
 The local release attempt compiled the current frontend but newly executed Rust dependency build scripts stalled before `main`, in `_dyld_start`, including a fresh release-profile `objc2-exception-helper`. Newly downloaded CPython and the vendor-signed uv also timed out on `--version`; an isolated cold-start smoke never reached health. New native dependency libraries also stalled during `dlopen` in a test against extracted wheels. No security controls were disabled or quarantine attributes removed. The own build/test processes were stopped after bounded diagnostics.
 
-No new verified `.app` or `.dmg` resulted from that attempt. Re-run the same build script on a functioning Apple Silicon host or macOS ARM64 CI runner, then review its manifests and logs. The prepared runtime resources are inputs, not evidence of a working install. Do not redistribute stale debug bundles.
+No new verified `.app` or `.dmg` resulted from that local attempt. The GitHub Actions workflow runs the same build and resource/runtime/DMG checks on a separate macOS ARM64 host. A successful CI run and its downloaded artifact provide that build's evidence; they do not remove the local execution blocker. The prepared local runtime resources are inputs, not evidence of a working install. Do not redistribute stale debug bundles.
