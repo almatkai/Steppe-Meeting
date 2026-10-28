@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from app_data import get_app_data_dir
 from . import local_stt
+from .stt_runtime import REPAIR_MESSAGE, _codec_probe, codec_error
 from .stt_catalog import RUNTIMES, STT_MODELS_CATALOG, compatibility_error, get_model_info
 
 logger = logging.getLogger("steppe.desktop.whisper")
@@ -35,17 +36,23 @@ _model_cache: Dict[str, Any] = {}
 _COMPLETE_FILE = ".download-complete.json"
 
 
-def is_env_installed(model_name: str = "small", include_setup: bool = False) -> bool:
+def env_error(model_name: str = "small", include_setup: bool = False) -> str | None:
     try:
         info = get_model_info(model_name)
-        if compatibility_error(model_name):
-            return False
+        if error := compatibility_error(model_name):
+            return error
         modules = list(RUNTIMES[info["engine"]]["modules"])
         if include_setup:
             modules.extend(info.get("setup_modules", ()))
-        return all(importlib.util.find_spec(module) is not None for module in modules)
+        if not all(importlib.util.find_spec(module) is not None for module in modules):
+            return f"Рабочая среда выбранной модели не установлена. {REPAIR_MESSAGE}"
+        return codec_error()
     except (ImportError, ModuleNotFoundError, ValueError):
-        return False
+        return f"Рабочая среда выбранной модели недоступна. {REPAIR_MESSAGE}"
+
+
+def is_env_installed(model_name: str = "small", include_setup: bool = False) -> bool:
+    return env_error(model_name, include_setup) is None
 
 
 def get_whisper_models_dir() -> Path:
@@ -114,7 +121,7 @@ def get_models_catalog_status() -> List[Dict[str, Any]]:
             "downloaded": downloaded,
             "disk_size_mb": get_model_disk_size_mb(model_id) if downloaded else 0.0,
             "is_downloading": _download_state["downloading"] and _download_state["model"] == model_id,
-            "env_installed": is_env_installed(model_id),
+            "env_installed": is_env_installed(model_id), "env_error": env_error(model_id),
             "supported": error is None, "compatibility_error": error,
         })
     return result
@@ -127,7 +134,7 @@ def get_whisper_full_status(active_mode: str, external_url: str, external_model:
     available = get_available_models()
     local_ready = env_ok and local_model_name in available
     if not error and not env_ok:
-        error = "Рабочая среда выбранной модели не установлена. Установите её в настройках."
+        error = env_error(local_model_name)
     elif not error and not local_ready:
         error = f"Модель '{local_model_name}' не скачана. Нажмите «Скачать» в настройках."
     return {
@@ -157,7 +164,7 @@ def _install_packages(model_name: str, progress, include_setup: bool):
     progress(f"Установка среды {info['engine']}...")
     uv = shutil.which("uv")
     cmd = [uv, "pip", "install", "--python", sys.executable] if uv else [sys.executable, "-m", "pip", "install"]
-    proc = subprocess.run([*cmd, *packages], capture_output=True, text=True)
+    proc = subprocess.run([*cmd, *packages], capture_output=True, text=True, timeout=600)
     if proc.returncode:
         raise RuntimeError((proc.stderr or proc.stdout or f"Exit code {proc.returncode}")[-1200:])
     importlib.invalidate_caches()
@@ -166,9 +173,17 @@ def _install_packages(model_name: str, progress, include_setup: bool):
     modules = list(RUNTIMES[info["engine"]]["modules"])
     if include_setup:
         modules.extend(info.get("setup_modules", ()))
-    check = subprocess.run([sys.executable, "-c", "; ".join(f"import {name}" for name in modules)], capture_output=True, text=True)
+    probe = Path(__file__).with_name("stt_runtime.py")
+    check = subprocess.run([sys.executable, "-B", "-c",
+                            "; ".join(f"import {name}" for name in modules)
+                            + "; import runpy; runpy.run_path(" + repr(str(probe)) + ", run_name='__main__')"],
+                           capture_output=True, text=True, timeout=60)
     if check.returncode:
-        raise RuntimeError((check.stderr or check.stdout)[-1200:])
+        logger.error("STT post-install decode/import probe failed: %s", (check.stderr or check.stdout)[-1200:])
+        raise RuntimeError(f"Проверка среды STT после установки не пройдена. {REPAIR_MESSAGE}")
+    _codec_probe.cache_clear()
+    if error := codec_error():
+        raise RuntimeError(error)
 
 
 def start_install_env(model_name: str = "small") -> Dict[str, Any]:
@@ -185,7 +200,9 @@ def start_install_env(model_name: str = "small") -> Dict[str, Any]:
 
     def worker():
         try:
-            _install_packages(model_name, lambda message: _env_state.update(progress=message), include_setup)
+            with _cache_lock:
+                _install_packages(model_name, lambda message: _env_state.update(progress=message), include_setup)
+                _model_cache.clear()
             _env_state["progress"] = "Установка успешно завершена"
         except Exception as exc:
             _env_state["error"] = f"Ошибка установки: {exc}"
@@ -315,7 +332,7 @@ def delete_downloaded_model(model_name: str) -> Dict[str, Any]:
 def get_cached_model(model_name: str, device: str = "auto"):
     info = get_model_info(model_name)
     if not is_env_installed(model_name):
-        raise RuntimeError(compatibility_error(model_name) or "Рабочая среда выбранной модели не установлена")
+        raise RuntimeError(env_error(model_name) or REPAIR_MESSAGE)
     if not is_model_downloaded(model_name):
         raise RuntimeError(f"Модель '{model_name}' не скачана локально")
     path = get_model_path(model_name)

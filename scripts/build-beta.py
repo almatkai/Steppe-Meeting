@@ -35,7 +35,7 @@ def inputs():
     files = {p for pattern in patterns for p in ROOT.glob(pattern) if p.is_file()}
     files.update(ROOT / p for p in ("package.json", "pnpm-lock.yaml", "src-tauri/Cargo.lock",
                                     "src-tauri/Cargo.toml", "src-tauri/tauri.conf.json", "src-tauri/tauri.beta.conf.json", "src-tauri/build.rs",
-                                    "src-tauri/Info.plist", "src-tauri/Entitlements.plist", "scripts/runtime-sources.json"))
+                                    "src-tauri/Info.plist", "src-tauri/Entitlements.plist", "scripts/runtime-sources.json", "scripts/build-beta.py", "scripts/smoke-bundled-runtime.py", "scripts/smoke-stt-codecs.py"))
     return {str(p.relative_to(ROOT)): sha(p) for p in sorted(files)}
 
 
@@ -115,7 +115,7 @@ def main():
     BUILD.mkdir(exist_ok=True)
     package = json.loads((ROOT / "package.json").read_text())
     version = package["version"]
-    assert version == "0.2.0-beta.1"
+    assert "-beta." in version, "Use an explicit beta version"
     assert json.loads((ROOT / "src-tauri/tauri.conf.json").read_text())["version"] == version
     assert f'version = "{version}"' in (ROOT / "src-tauri/Cargo.toml").read_text()
     run([sys.executable, ROOT / "scripts/prepare-runtime.py"], timeout=360)
@@ -131,7 +131,7 @@ def main():
     assert inputs() == source, "Source changed during native build; rebuild before distributing"
     built = ROOT / "src-tauri/target/release/bundle/macos/Steppe Meeting.app"
     manifest = audit(built, stamp)
-    run([sys.executable, ROOT / "scripts/smoke-bundled-runtime.py", "--app", built], timeout=260)
+    run([sys.executable, ROOT / "scripts/smoke-bundled-runtime.py", "--app", built, "--stt-codecs"], timeout=1800)
     # A failing runtime test stops here, before anything is labelled distributable.
     output = BUILD / f"release-{version}-aarch64"
     output.mkdir(exist_ok=True)
@@ -158,6 +158,7 @@ def main():
         run(["/usr/bin/hdiutil", "detach", mount])
     (output / "app-content-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     shutil.copy2(BUILD / "build-info.json", output)
+    shutil.copy2(BUILD / "stt-codec-smoke.json", output)
     shutil.copy2(ROOT / "DISTRIBUTION.md", output)
     (output / "SHA256SUMS").write_text(f"{sha(dmg)}  {dmg.name}\n")
     print(f"VERIFIED LOCAL BETA: {dmg} ({dmg.stat().st_size} bytes), SHA256 {sha(dmg)}", flush=True)

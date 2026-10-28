@@ -645,7 +645,7 @@ export const SettingsView: React.FC = () => {
                 {!selectedEnvInstalled ? (
                   <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                     <p className="text-[11px] text-neutral-400">
-                      Зависимости устанавливаются для выбранной модели. Кнопка скачивания также установит нужную среду автоматически.
+                      {selectedLocalModel?.env_error || "Зависимости устанавливаются для выбранной модели. Кнопка скачивания также установит нужную среду автоматически."}
                     </p>
                     <button
                       type="button"

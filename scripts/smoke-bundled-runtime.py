@@ -2,6 +2,7 @@
 
 Use --app for the final .app; without it, test an exact resource staging copy.
 No model downloads, external LLM calls, existing server or real user data.
+--stt-codecs adds an explicit network dependency test in a separate venv.
 """
 import argparse
 import hashlib
@@ -27,8 +28,10 @@ def hashes(root):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--app", type=Path)
+    parser.add_argument("--stt-codecs", action="store_true", help="Test optional production STT install/repair in a separate environment")
     parser.add_argument("--timeout", type=int, default=110)
     args = parser.parse_args()
+    version = json.loads((ROOT / "package.json").read_text())["version"]
     with tempfile.TemporaryDirectory(prefix="steppe-bundle-smoke-") as folder:
         work = Path(folder)
         if args.app:
@@ -52,7 +55,7 @@ def main():
         data = work / "fresh-data"
         env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(work / "home"),
                "STEPPE_DATA_DIR": str(data), "DESKTOP_API_PORT": str(port),
-               "STEPPE_APP_VERSION": "0.2.0-beta.1", "UV_OFFLINE": "1",
+               "STEPPE_APP_VERSION": version, "UV_OFFLINE": "1",
                "UV_PYTHON_DOWNLOADS": "never", "HF_HUB_OFFLINE": "1"}
         os.makedirs(env["HOME"])
         base = f"http://127.0.0.1:{port}/api/v1"
@@ -81,7 +84,7 @@ def main():
                                 time.sleep(.2)
                         assert health["backend_dir"] == str(resources / "backend"), health
                         assert health["runtime"] == "bundled", health
-                        assert health["app_version"] == "0.2.0-beta.1", health
+                        assert health["app_version"] == version, health
                         assert health["pid"] == process.pid, health
                         assert len(get("/system/whisper/status")["local"]["catalog"]) == 17
                         assert get("/templates")
@@ -102,6 +105,13 @@ def main():
                             pass
                         else:
                             raise AssertionError("Owned server survived shutdown")
+            if args.stt_codecs:
+                portable = next((data / "runtime").glob("*/python/bin/python3"))
+                subprocess.run([str(portable), "-B", str(ROOT / "scripts/smoke-stt-codecs.py"),
+                                "--resources", str(resources), "--python", str(portable),
+                                "--report", str(ROOT / "build/stt-codec-smoke.json")],
+                               check=True, timeout=1600)
+                assert hashes(resources) == before, "STT smoke changed signed resources"
         finally:
             print(f"Runtime smoke log: {log_path}", flush=True)
 

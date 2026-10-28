@@ -1,4 +1,4 @@
-# Steppe Meeting 0.2.0-beta.1 — beta distribution
+# Steppe Meeting 0.2.0-beta.2 — beta distribution
 
 Target: Apple Silicon (`arm64` / `aarch64`), macOS 15 or later. Intel builds are not produced by this packaging configuration.
 
@@ -17,18 +17,19 @@ The script applies `src-tauri/tauri.beta.conf.json` on top of the standard Tauri
 Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests and native backend lifecycle tests to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
 
 ```text
-build/release-0.2.0-beta.1-aarch64/
-  Steppe-Meeting_0.2.0-beta.1_aarch64.app
-  Steppe-Meeting_0.2.0-beta.1_aarch64.dmg
+build/release-0.2.0-beta.2-aarch64/
+  Steppe-Meeting_0.2.0-beta.2_aarch64.app
+  Steppe-Meeting_0.2.0-beta.2_aarch64.dmg
   SHA256SUMS
   app-content-manifest.json
   build-info.json
+  stt-codec-smoke.json
   DISTRIBUTION.md
 ```
 
 The `aarch64` token lets the beta update tracker identify the DMG. `build-info.json` records the Git HEAD, hashes of production source inputs, exact frontend assets and the runtime manifest, including uncommitted source changes. Build and test logs remain under `build/`. The app bundle directory has a per-file SHA-256 manifest; the DMG has the single-file checksum in `SHA256SUMS`.
 
-The CI download contains the DMG, both JSON manifests, `SHA256SUMS` and this document. Before publication, check that `build-info.json` identifies the approved final commit and verify the downloaded DMG against `SHA256SUMS`. Keep the successful run URL with the release review. Downloading and checking a CI artifact locally does not establish local native UI or Quit verification.
+The CI download contains the DMG, source/app manifests, the actual STT codec/repair test receipt, `SHA256SUMS` and this document. Before publication, check that `build-info.json` identifies the approved final commit and verify the downloaded DMG against `SHA256SUMS`. Keep the successful run URL with the release review. Downloading and checking a CI artifact locally does not establish local native UI or Quit verification.
 
 Additional checks, using an existing development environment:
 
@@ -50,7 +51,8 @@ The backend smoke checks the actual packaged server and its owned process shutdo
 - Release backend selection never falls back to the compile-time checkout. Its health identity includes the exact resource path, app version and bundled runtime marker; an old server at the same path cannot impersonate a new version.
 - First launch extracts Python and creates a venv in `~/Library/Application Support/Steppe Meeting/runtime/<manifest-id>/`. Core setup uses bundled `uv`, `--offline`, `--no-index`, `--no-python-downloads` and hash verification. It writes no files inside `.app`. An incomplete/damaged runtime produces a readable startup failure and a log path; there is no external Python fallback or false ready status.
 - A different runtime manifest creates a new environment. Model weights in user data remain separate; model-specific Python dependencies may need installation again after such an update.
-- STT environments and weights are installed only by the existing model-specific UI actions and require network access. The backend PATH starts with bundled `uv`, so these actions work without a user installation of uv. No model installation or live LLM call is part of the smoke test.
+- The shared codec profile is **faster-whisper 1.2.1 + PyAV 18.1.0** for every STT engine. PyAV 19 removed `metadata_errors` from `av.open`, which faster-whisper 1.2.1 still calls. Status checks validate versions and cache a short synthetic decode in a fresh subprocess. An incompatible or broken environment is not Ready and offers «Установить среду». That action reinstalls the compatible profile without deleting model weights, other engine dependencies or user configuration. A profile change alone does not change the core runtime ID; existing beta.1 environments therefore need this explicit UI repair. Status polling never runs an installer.
+- STT environments and weights are installed only by the existing model-specific UI actions and require network access. The backend PATH starts with bundled `uv`, so these actions work without a user installation of uv. The build runs an explicit, network-enabled STT dependency test in a separate temporary environment using this same packaged Python, uv, core wheels and production installer. It installs the exact shared profile, decodes synthetic WAV and WebM/Opus, reproduces the PyAV 19 failure and repairs it. No model weights or live LLM calls are involved; no optional dependencies or caches are added to the app.
 - CLI providers still require the corresponding CLI and user login. HTTP providers require their configured service. These services are independent of backend readiness. Models, optional dependencies and external services can have their own platform requirements.
 
 ## Sharing and signing

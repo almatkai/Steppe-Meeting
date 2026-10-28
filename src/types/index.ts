@@ -103,6 +103,7 @@ export interface WhisperModelCatalogItem {
   streaming: 'chunked' | 'native';
   source_url: string;
   env_installed: boolean;
+  env_error?: string | null;
   supported: boolean;
   compatibility_error?: string | null;
 }

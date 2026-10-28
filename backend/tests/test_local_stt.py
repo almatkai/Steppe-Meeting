@@ -118,6 +118,24 @@ class LocalSTTTests(unittest.TestCase):
             self.assertFalse(service.is_env_installed("wav2vec2-kk"))
             self.assertFalse(service.is_env_installed("vosk-small-kz"))
 
+    def test_bad_pyav_is_not_ready_and_can_be_repaired_without_weights_download(self):
+        from importlib.metadata import version as real_version
+        self.weights("small")
+        def bad_version(name):
+            return "19.0.2" if name == "av" else real_version(name)
+        with patch("importlib.metadata.version", side_effect=bad_version), \
+             patch.object(service.importlib.util, "find_spec", return_value=object()), \
+             patch.object(service, "_install_packages") as install, \
+             patch.object(service.threading, "Thread", InlineThread):
+            self.assertFalse(service.is_env_installed("small"))
+            status = service.get_whisper_full_status("local", "", "", "", "small")
+            self.assertFalse(status["ready"])
+            self.assertFalse(status["local"]["model_ready"])
+            self.assertIn("Установить среду", status["local"]["error"])
+            self.assertEqual(service.start_install_env("small")["status"], "started")
+            install.assert_called_once_with("small", unittest.mock.ANY, False)
+        self.assertTrue(service.is_model_downloaded("small"))
+
     def test_unsupported_mlx_is_reported(self):
         with patch("engine.stt_catalog.sys.platform", "linux"):
             self.assertIsNotNone(compatibility_error("gigaam-multilingual-int4"))

@@ -30,9 +30,10 @@ class STTAPITests(unittest.TestCase):
         self.assertEqual(response.json()["pid"], os.getpid())
 
     def test_health_identifies_bundled_version_without_ai_probe(self):
-        with patch.dict(os.environ, STEPPE_APP_VERSION="0.2.0-beta.1", STEPPE_BUNDLED_RUNTIME="1"):
+        version = json.loads((Path(__file__).resolve().parents[2] / "package.json").read_text())["version"]
+        with patch.dict(os.environ, STEPPE_APP_VERSION=version, STEPPE_BUNDLED_RUNTIME="1"):
             response = self.client.get("/api/v1/system/health")
-        self.assertEqual(response.json()["app_version"], "0.2.0-beta.1")
+        self.assertEqual(response.json()["app_version"], version)
         self.assertEqual(response.json()["runtime"], "bundled")
 
     def test_installer_targets_requested_model(self):

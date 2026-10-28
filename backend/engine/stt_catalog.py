@@ -6,24 +6,26 @@ import platform
 import sys
 from typing import Any
 
+from .stt_runtime import STT_CODEC_PACKAGES
+
 
 RUNTIMES = {
     "faster-whisper": {
         "modules": ("faster_whisper",),
-        "packages": ("faster-whisper>=1.2,<2",),
+        "packages": STT_CODEC_PACKAGES,
     },
     "gigaam-mlx": {
         "modules": ("faster_whisper", "gigaam_multilingual_mlx", "mlx.core"),
-        "packages": ("faster-whisper>=1.2,<2", "gigaam-multilingual-mlx==0.1.5"),
+        "packages": (*STT_CODEC_PACKAGES, "gigaam-multilingual-mlx==0.1.5"),
     },
     "wav2vec2-ctc": {
         "modules": ("faster_whisper", "torch"),
-        "packages": ("faster-whisper>=1.2,<2", "torch>=2.9,<3"),
+        "packages": (*STT_CODEC_PACKAGES, "torch>=2.9,<3"),
     },
     "vosk": {
         "modules": ("faster_whisper", "vosk"),
         # 0.3.44 is the latest release with a macOS universal2 wheel.
-        "packages": ("faster-whisper>=1.2,<2", "vosk>=0.3.44,<0.4"),
+        "packages": (*STT_CODEC_PACKAGES, "vosk>=0.3.44,<0.4"),
     },
 }
 
