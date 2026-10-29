@@ -104,6 +104,7 @@ export interface WhisperModelCatalogItem {
   source_url: string;
   env_installed: boolean;
   env_error?: string | null;
+  quality_warning?: string | null;
   supported: boolean;
   compatibility_error?: string | null;
 }
@@ -118,6 +119,7 @@ export interface WhisperLocalStatus {
   engine?: WhisperModelCatalogItem['engine'];
   error?: string | null;
   model_ready: boolean;
+  quality_warning?: string | null;
   available_models: string[];
   catalog: WhisperModelCatalogItem[];
   downloading: boolean;

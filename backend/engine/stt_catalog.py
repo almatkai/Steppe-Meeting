@@ -90,6 +90,7 @@ STT_MODELS_CATALOG["whisper-turbo-kaz-rus-v1"] = {
     # replay; fresh context recovered it. Keep this mitigation model-specific:
     # evidence from one recording does not establish general wording accuracy.
     "transcription_options": {"condition_on_previous_text": False},
+    "quality_warning": "На реальных записях эта модель пропускает речь в начале и середине. Полнота не подтверждена. Для важных записей выберите другую модель и проверьте текст по аудио.",
     "source_url": "https://huggingface.co/abilmansplus/whisper-turbo-kaz-rus-v1",
     "repo_id": "abilmansplus/whisper-turbo-kaz-rus-v1",
     "revision": "904d5d22339952909001d1abcbc1ecf29d26d706",

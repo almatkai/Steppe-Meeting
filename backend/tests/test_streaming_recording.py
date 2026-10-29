@@ -68,6 +68,32 @@ class StreamingRecordingTests(unittest.TestCase):
         self.assertEqual(retry.json(), first.json())
         self.assertEqual(recognize.call_count, 1)
 
+    def test_full_audio_cache_uses_frozen_stream_config_and_survives_deletion(self):
+        from recording_cache import load_input
+        session = self.begin()
+        self.settings['whisper_local_model'] = 'medium'
+        response = self.client.post(f'/api/v1/meetings/{self.id}/upload-audio',
+            files={'file': ('full.wav', audio(61), 'audio/wav')})
+        self.assertEqual(response.status_code, 200, response.text)
+        sha = response.json()['regression_case']
+        root = server.DATA_DIR / 'stt-regression'
+        self.assertEqual(load_input(sha, root).read_bytes(), audio(61))
+        import json
+        manifests = list((root / 'cases' / sha / 'sources').glob('*.json'))
+        manifest = next(json.loads(p.read_text()) for p in manifests if json.loads(p.read_text())['source_id'] == self.id)
+        self.assertEqual(manifest['config']['model'], 'small')
+        self.assertTrue(manifest['config']['streaming'])
+        self.client.delete(f'/api/v1/meetings/{self.id}')
+        self.assertTrue(load_input(sha, root).is_file())
+
+    def test_cache_failure_does_not_acknowledge_upload(self):
+        with patch.object(server, 'retain_recording', side_effect=OSError('disk full')):
+            response = self.client.post(f'/api/v1/meetings/{self.id}/upload-audio',
+                files={'file': ('full.wav', audio(), 'audio/wav')})
+        self.assertEqual(response.status_code, 503)
+        with server.get_db() as db:
+            self.assertFalse(db.execute('SELECT audio_path FROM meetings WHERE id=?',(self.id,)).fetchone()['audio_path'])
+
     def test_stop_formats_checkpoint_and_generates_without_full_file_stt(self):
         session = self.begin()
         with patch.object(server.whisper_service, 'transcribe_local', side_effect=[self.result('первая часть'), self.result('вторая часть')]) as recognize:

@@ -1,6 +1,19 @@
-# Steppe Meeting 0.2.0-beta.2 — beta distribution
+# Steppe Meeting 0.2.0-beta.3 — beta distribution
 
 Target: Apple Silicon (`arm64` / `aarch64`), macOS 15 or later. Intel builds are not produced by this packaging configuration.
+
+## Beta.3 changes
+
+Final audio uploads from Mini and the wizard now retain an immutable, private
+content-addressed copy under Application Support for opt-in offline regression
+replays, surviving meeting deletion. A failed cache save returns an error for
+retry. Offline reference tests and full-reference metrics supplement time-bound
+anchors; private recordings and reports are never bundled. The custom
+Kazakh/Russian Whisper model exposes its observed speech-omission warning.
+Wav2Vec2-rukk was explicitly verified and selected for the requesting user;
+existing model preferences and defaults remain unchanged for all users. This
+release does not claim a universal STT completeness fix. See
+`docs/local-stt-regression.md` for evidence and limits.
 
 ## Build and verify
 
@@ -17,9 +30,9 @@ The script applies `src-tauri/tauri.beta.conf.json` on top of the standard Tauri
 Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests and native backend lifecycle tests to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
 
 ```text
-build/release-0.2.0-beta.2-aarch64/
-  Steppe-Meeting_0.2.0-beta.2_aarch64.app
-  Steppe-Meeting_0.2.0-beta.2_aarch64.dmg
+build/release-0.2.0-beta.3-aarch64/
+  Steppe-Meeting_0.2.0-beta.3_aarch64.app
+  Steppe-Meeting_0.2.0-beta.3_aarch64.dmg
   SHA256SUMS
   app-content-manifest.json
   build-info.json

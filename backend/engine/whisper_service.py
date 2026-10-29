@@ -123,6 +123,7 @@ def get_models_catalog_status() -> List[Dict[str, Any]]:
             "is_downloading": _download_state["downloading"] and _download_state["model"] == model_id,
             "env_installed": is_env_installed(model_id), "env_error": env_error(model_id),
             "supported": error is None, "compatibility_error": error,
+            "quality_warning": info.get("quality_warning"),
         })
     return result
 
@@ -146,6 +147,7 @@ def get_whisper_full_status(active_mode: str, external_url: str, external_model:
             "env_install_progress": _env_state["progress"], "env_install_error": _env_state["error"],
             "selected_model": local_model_name, "engine": STT_MODELS_CATALOG.get(local_model_name, {}).get("engine"),
             "model_ready": local_ready, "error": error,
+            "quality_warning": STT_MODELS_CATALOG.get(local_model_name, {}).get("quality_warning"),
             "available_models": available, "catalog": get_models_catalog_status(),
             "downloading": _download_state["downloading"], "downloading_model": _download_state["model"],
             "download_status": _download_state["status"], "download_progress_text": _download_state["progress_text"],

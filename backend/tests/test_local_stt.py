@@ -50,6 +50,16 @@ class LocalSTTTests(unittest.TestCase):
             (target / service._COMPLETE_FILE).write_text(json.dumps({"model": model_id, "files": sizes}))
         return target
 
+    def test_quality_warning_is_separate_from_runtime_readiness(self):
+        self.weights('whisper-turbo-kaz-rus-v1')
+        with patch.object(service, 'is_env_installed', return_value=True), patch.object(service, 'env_error', return_value=None):
+            status = service.get_whisper_full_status('local', '', '', '', 'whisper-turbo-kaz-rus-v1')
+        self.assertTrue(status['ready'])
+        self.assertIn('пропускает', status['local']['quality_warning'])
+        selected = next(x for x in status['local']['catalog'] if x['id'] == 'whisper-turbo-kaz-rus-v1')
+        self.assertEqual(selected['quality_warning'], status['local']['quality_warning'])
+        self.assertEqual(status['local']['selected_model'], 'whisper-turbo-kaz-rus-v1')
+
     def test_catalog_contains_all_requested_formats(self):
         engines = {info["engine"] for info in STT_MODELS_CATALOG.values()}
         self.assertEqual(engines, {"faster-whisper", "gigaam-mlx", "wav2vec2-ctc", "vosk"})

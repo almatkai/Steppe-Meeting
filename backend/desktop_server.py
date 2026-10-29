@@ -60,6 +60,7 @@ DB_PATH = DATA_DIR / "meetings.db"
 from engine.config import settings
 from live_captions import create_router as create_captions_router
 from recording_streams import RecordingStreams
+from recording_cache import retain_recording
 from generation_jobs import GenerationJobs
 from release_updates import checker as update_checker
 from engine import cli_llm, chunking, docx_template, docx_preview, template_generation, template_profile, template_protocol, pdf_export, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
@@ -538,9 +539,10 @@ async def create_meeting(req: CreateMeetingRequest):
 @app.post("/api/v1/meetings/{meeting_id}/upload-audio")
 async def upload_audio(meeting_id: str, file: UploadFile = File(...)):
     with get_db() as conn:
-        row = conn.execute("SELECT id FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
+        row = conn.execute("SELECT id, source_language FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Meeting not found")
+        session = conn.execute("SELECT config FROM recording_streams WHERE meeting_id=?", (meeting_id,)).fetchone()
 
     clean_filename = Path(file.filename).name if file.filename else "recording.wav"
     # Remove any stray path separators
@@ -548,9 +550,35 @@ async def upload_audio(meeting_id: str, file: UploadFile = File(...)):
     safe_filename = f"{meeting_id}_{clean_filename}"
     file_path = AUDIO_DIR / safe_filename
 
-    with open(file_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    mode = get_setting("whisper_mode", "local")
+    config = json.loads(session["config"]) if session else {
+        "mode": mode,
+        "model": get_setting("whisper_local_model", "small") if mode == "local" else get_setting("whisper_model", "whisper-1"),
+        "device": get_setting("whisper_device", "auto"),
+        "language": row["source_language"],
+    }
+    config["streaming"] = bool(session)
+    # Mini and wizard use this same endpoint. Publish only after stop/final data
+    # has arrived and the durable regression copy is verified. Never acknowledge
+    # a cache failure as a successful save or leave a partially overwritten file.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=AUDIO_DIR, prefix=".upload-", delete=False) as output:
+            temporary = Path(output.name)
+            size = 0
+            while content := await file.read(1024 * 1024):
+                output.write(content)
+                size += len(content)
+            output.flush()
+            os.fsync(output.fileno())
+        cached = await asyncio.to_thread(retain_recording, temporary, meeting_id, config,
+                                        root=DATA_DIR / "stt-regression", source_name=clean_filename)
+        os.replace(temporary, file_path)
+    except OSError as error:
+        raise HTTPException(503, "Не удалось сохранить аудио и локальный кэш. Освободите место и повторите сохранение.") from error
+    finally:
+        if temporary and temporary.exists():
+            temporary.unlink()
 
     with get_db() as conn:
         conn.execute("""
@@ -560,7 +588,7 @@ async def upload_audio(meeting_id: str, file: UploadFile = File(...)):
         """, (clean_filename, str(file_path), meeting_id))
         conn.commit()
 
-    return {"meeting_id": meeting_id, "filename": clean_filename, "size": len(content)}
+    return {"meeting_id": meeting_id, "filename": clean_filename, "size": size, "regression_case": cached["sha256"]}
 
 class RecordingCompletionRequest(BaseModel):
     session_id: str

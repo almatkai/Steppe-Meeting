@@ -622,6 +622,9 @@ export const SettingsView: React.FC = () => {
           {/* Local Whisper Mode Controls */}
           {config.whisper_mode === "local" ? (
             <div className="space-y-4 text-xs">
+              {selectedLocalModel?.quality_warning && (
+                <p role="status" className="text-neutral-300">{selectedLocalModel.quality_warning}</p>
+              )}
               {/* Step 1: Environment */}
               <div className="p-3.5 rounded-xl bg-neutral-950/80 border border-neutral-800/80 space-y-2">
                 <div className="flex items-center justify-between">
