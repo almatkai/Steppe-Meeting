@@ -1,3 +1,5 @@
+import { acquireUpdateCapture } from "../../utils/updateCapture";
+import { assertUpdateNotInstalling } from "../../services/api";
 import React, { useEffect, useRef, useState } from "react";
 import { ConfirmDeleteDialog } from "../ui/ConfirmDeleteDialog";
 import {
@@ -15,7 +17,7 @@ import {
 } from "@phosphor-icons/react";
 
 interface AudioRecorderProps {
-  onAudioReady: (file: File | null) => void;
+  onAudioReady: (file: File | null, lease?: () => Promise<void>) => void;
 }
 
 const checkIsTauri = () => {
@@ -67,6 +69,8 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
     }
   }, [isTauri]);
 
+  const releaseUpdateCapture = useRef<(() => Promise<void>) | null>(null);
+  const releaseCapture = () => { startingCapture.current = false; const release = releaseUpdateCapture.current; releaseUpdateCapture.current = null; void release?.().catch(console.error); };
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
@@ -76,11 +80,20 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
   const timerRef = useRef<any>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const awaitingWebStop = useRef(false);
+  const awaitingNativeStop = useRef(false);
+  const nativeActive = useRef(false);
+  const startingCapture = useRef(false);
+  const mounted = useRef(true);
+  const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
   const prevBarsRef = useRef<number[]>(new Array(52).fill(6));
 
   // Cleanup on unmount
   useEffect(() => {
+    mounted.current = true;
     return () => {
+      mounted.current = false;
+      if (nativeActive.current) void stopRecordingRef.current?.();
       clearInterval(timerRef.current);
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
         mediaRecorderRef.current.stop();
@@ -94,6 +107,8 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
       if (audioContextRef.current) {
         audioContextRef.current.close().catch(() => {});
       }
+      // Web onstop owns final chunks and transfers its lease to the file owner.
+      if (!awaitingWebStop.current && !awaitingNativeStop.current && !startingCapture.current) releaseCapture();
       if (audioUrl) {
         URL.revokeObjectURL(audioUrl);
       }
@@ -281,6 +296,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
   };
 
   const startRecording = async () => {
+    try { assertUpdateNotInstalling(); } catch (error) { setError((error as Error).message); return; }
     setError("");
     if (audioUrl) {
       URL.revokeObjectURL(audioUrl);
@@ -294,6 +310,10 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
       return;
     }
 
+    startingCapture.current = true;
+    try { releaseUpdateCapture.current = await acquireUpdateCapture(); }
+    catch { startingCapture.current = false; setError('Устанавливаем обновление. Дождитесь перезапуска приложения.'); return; }
+    if (!mounted.current) { startingCapture.current = false; releaseCapture(); return; }
     // -------------------------------------------------------------
     // OPTION A: NATIVE TAURI ScreenCaptureKit (Only when system audio is selected)
     // -------------------------------------------------------------
@@ -305,10 +325,17 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         if (!hasPerm) {
           throw new Error("PermissionNotGranted");
         }
+        if (!mounted.current) { releaseCapture(); return; }
         await invoke<string>("start_native_recording", {
           recordMic: includeMic,
         });
 
+        if (!mounted.current) {
+          await invoke("stop_native_recording");
+          releaseCapture(); return;
+        }
+        nativeActive.current = true;
+        startingCapture.current = false;
         setIsNativeRecording(true);
         setIsRecording(true);
         setRecordingTime(0);
@@ -319,6 +346,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         }, 1000);
         return;
       } catch (nativeErr: any) {
+        if (!mounted.current) { releaseCapture(); return; }
         console.warn("Native system recording unavailable, falling back to microphone:", nativeErr);
         if (includeMic) {
           setError(
@@ -329,6 +357,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
           setError(
             "Для записи звука системы включите тумблер Steppe Meeting в «Системные настройки» -> «Конфиденциальность и безопасность» -> «Запись экрана и системного звука» и подтвердите «Завершить и перезапустить»."
           );
+          releaseCapture();
           return;
         }
       }
@@ -386,6 +415,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
                 "Аудиодорожка системы не была передана. В верхней панели нажмите синюю кнопку «Поделиться всем экраном»."
               );
             }
+            releaseCapture();
             return;
           }
         } catch (displayErr: any) {
@@ -393,6 +423,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
             setError(
               "Выбор был отменен. Чтобы записать звук системы, в верхней панели нажмите «Поделиться всем экраном»."
             );
+            releaseCapture();
             return;
           } else {
             throw displayErr;
@@ -420,8 +451,14 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         }
       }
 
+      if (!mounted.current) {
+        micStream?.getTracks().forEach(track => track.stop());
+        displayStream?.getTracks().forEach(track => track.stop());
+        releaseCapture(); return;
+      }
       if (!micConnected && !systemConnected) {
         setError("Не удалось подключить ни один источник звука.");
+        releaseCapture();
         return;
       }
 
@@ -476,6 +513,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         }
       };
 
+      awaitingWebStop.current = true;
       mediaRecorder.onstop = () => {
         const actualType = mediaRecorder.mimeType || mimeType || "audio/mp4";
         const extension =
@@ -495,7 +533,9 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
             { type: actualType }
           );
           setRecordedFile(file);
-          onAudioReady(file);
+          const lease = releaseUpdateCapture.current;
+          releaseUpdateCapture.current = null;
+          onAudioReady(file, lease || undefined);
 
           const url = URL.createObjectURL(blob);
           setAudioUrl(url);
@@ -509,9 +549,19 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
           displayStreamRef.current.getTracks().forEach((track) => track.stop());
           displayStreamRef.current = null;
         }
+        awaitingWebStop.current = false;
+        releaseCapture();
       };
 
+      if (!mounted.current) {
+        awaitingWebStop.current = false;
+        micStream?.getTracks().forEach(track => track.stop());
+        displayStream?.getTracks().forEach(track => track.stop());
+        void audioCtx.close().catch(() => {});
+        releaseCapture(); return;
+      }
       mediaRecorder.start(250);
+      startingCapture.current = false;
       setIsRecording(true);
       setRecordingTime(0);
 
@@ -519,6 +569,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         setRecordingTime((prev) => prev + 1);
       }, 1000);
     } catch (err: any) {
+      awaitingWebStop.current = false;
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach((t) => t.stop());
         micStreamRef.current = null;
@@ -527,6 +578,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         displayStreamRef.current.getTracks().forEach((t) => t.stop());
         displayStreamRef.current = null;
       }
+      releaseCapture();
       setError("Ошибка при запуске записи: " + (err.message || String(err)));
     }
   };
@@ -536,6 +588,8 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
 
     // Stop native recording
     if (isNativeRecording) {
+      if (awaitingNativeStop.current) return;
+      awaitingNativeStop.current = true;
       try {
         setIsRecording(false);
         clearInterval(timerRef.current);
@@ -561,7 +615,9 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         );
 
         setRecordedFile(file);
-        onAudioReady(file);
+        const lease = releaseUpdateCapture.current;
+        releaseUpdateCapture.current = null;
+        onAudioReady(file, lease || undefined);
 
         const url = URL.createObjectURL(blob);
         setAudioUrl(url);
@@ -571,6 +627,9 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
         setError("Ошибка остановки нативной записи: " + (err.message || String(err)));
         setIsNativeRecording(false);
       }
+      nativeActive.current = false;
+      awaitingNativeStop.current = false;
+      releaseCapture();
       return;
     }
 
@@ -585,6 +644,8 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onAudioReady }) =>
       audioContextRef.current = null;
     }
   };
+
+  stopRecordingRef.current = stopRecording;
 
   const discardRecording = () => {
     if (audioPlayerRef.current) {

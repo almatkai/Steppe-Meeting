@@ -20,6 +20,7 @@ export function createUpdateTracker(deps: Dependencies) {
   let initialization: Promise<void> | undefined;
   let persisted: UpdateChannel | null = 'stable';
   let channelWrite: Promise<void> | undefined;
+  let jobActive = false;
   let epoch = 0;
   let inflight: { epoch: number; promise: Promise<void> } | undefined;
   const initialize = () => {
@@ -78,11 +79,12 @@ export function createUpdateTracker(deps: Dependencies) {
     return channelWrite;
   };
   return {
+    setJobActive(active: boolean) { jobActive = active; },
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     getSnapshot: () => state,
     check,
     changeChannel(channel: UpdateChannel) {
-      if (!state.initialized || (state.channel === channel && !state.channelError)) return;
+      if (jobActive || !state.initialized || (state.channel === channel && !state.channelError)) return;
       epoch++;
       set({ channel, result: null, error: '', checking: false, savingChannel: true, channelSaved: false, channelError: '' });
       void persistChannel().then(() => { if (!state.channelError) void check(); });

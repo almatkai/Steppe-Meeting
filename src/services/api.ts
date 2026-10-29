@@ -3,12 +3,19 @@ import { invoke } from "@tauri-apps/api/core";
 import type { CaptionChunk, CaptionResult, StreamingTranscript } from "../utils/liveCaptions";
 import type { Meeting, Participant, SystemConfig, SystemStatus, WhisperStatus, ChatSession, ChatMessage, Citation, ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../types";
 
+let updateInstalling = false;
+export function setUpdateInstalling(value: boolean) { updateInstalling = value; }
+export function assertUpdateNotInstalling() {
+  if (updateInstalling) throw new Error('Устанавливаем обновление. Дождитесь перезапуска приложения.');
+}
+
 const API_BASE = "http://127.0.0.1:8008/api/v1";
 
 // Each webview shares one startup attempt across its concurrent API requests.
 // A failed request invalidates it so the next user retry can restart the server.
 let backendReady: Promise<void> | undefined;
 async function backendFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  if (options.method === 'POST' && /\/(recording-session|process-recording|generate|transcribe)$/.test(url.split('?')[0])) assertUpdateNotInstalling();
   const native = typeof window !== "undefined" && Boolean((window as any).__TAURI_INTERNALS__);
   if (native) {
     backendReady ??= invoke<void>("ensure_backend").catch((error) => {
@@ -679,4 +686,19 @@ async function cliAction(action: string, values: object) {
     if (error instanceof Error && error.name === 'TimeoutError') throw new Error(`CLI не ответил за ${timeoutMs / 1000} с. Повторите действие.`);
     throw error;
   }
+}
+
+/** Fixed updater routes only; never accept caller-provided URLs or filesystem paths. */
+export async function updateRequest(route: 'job' | 'download' | 'cancel', body?: { selection_id: string } | { job_id: string }): Promise<Record<string, unknown>> {
+  const res = await backendFetch(`${API_BASE}/system/updates/${route}`, {
+    method: body ? 'POST' : 'GET', headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    // Preserve only the contract's structured code; never leak server detail/prose.
+    const code = body?.error_code === 'invalid_update_request' ? 'stale_selection' : res.status === 409 ? 'busy' : 'network';
+    throw { status: res.status, code };
+  }
+  return res.json();
 }

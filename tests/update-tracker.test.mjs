@@ -151,3 +151,13 @@ test('A synchronous request failure does not stick the coalescing slot or preven
   fail = false; await tracker.check(true);
   assert.equal(tracker.getSnapshot().result.status, 'no_releases');
 });
+
+test('An app-owned update locks channel writes while background checks remain independent', async () => {
+  const writes = [];
+  const tracker = createUpdateTracker(deps({ saveChannel: async channel => writes.push(channel) }));
+  await tracker.check(); tracker.setJobActive(true); tracker.changeChannel('beta');
+  assert.equal(tracker.getSnapshot().channel, 'stable'); assert.deepEqual(writes, []);
+  await tracker.check(true); assert.equal(tracker.getSnapshot().result.channel, 'stable');
+  tracker.setJobActive(false); tracker.changeChannel('beta'); await settle();
+  assert.deepEqual(writes, ['beta']);
+});

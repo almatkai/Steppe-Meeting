@@ -1,6 +1,7 @@
 mod backend;
 mod mini_capture;
 mod recorder;
+mod updater;
 
 use recorder::{
     check_screen_capture_permission, open_microphone_settings, open_screen_recording_settings,
@@ -230,11 +231,29 @@ fn drag_mini_window(webview: tauri::Webview) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(not(feature = "packaged-updater-fixture"))]
+    if std::env::args().any(|a| a.starts_with("--steppe-updater-fixture")) {
+        eprintln!("Packaged updater fixture mode is unavailable in production.");
+        std::process::exit(2);
+    }
+    #[cfg(feature = "packaged-updater-fixture")]
+    let _ = updater::fixture_root();
     let app = tauri::Builder::default()
         .manage(RecorderState(Mutex::new(None)))
         .manage(backend::BackendState::default())
+        .manage(updater::UpdateState::default())
+        .on_web_content_process_terminate(|webview| {
+            // WebKit has stopped this webview's microphone. Native SCStream
+            // ownership remains in RecorderState and is still checked at install.
+            webview
+                .state::<updater::UpdateState>()
+                .release_window(webview.label());
+        })
         .invoke_handler(tauri::generate_handler![
             backend::ensure_backend,
+            updater::install_update,
+            updater::updater_fixture,
+            updater::set_update_capture_busy,
             start_native_recording,
             stop_native_recording,
             read_recording_file,
@@ -271,6 +290,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window
+                    .state::<updater::UpdateState>()
+                    .release_window(window.label());
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     let _ = window.hide();
@@ -292,6 +316,11 @@ pub fn run() {
         }
         tauri::RunEvent::Exit => {
             app_handle.state::<backend::BackendState>().stop();
+            #[cfg(feature = "packaged-updater-fixture")]
+            let _ = std::fs::write(
+                updater::fixture_root().join(format!("exit-{}.json", std::process::id())),
+                br#"{"backend_stopped":true}"#,
+            );
         }
         tauri::RunEvent::Reopen { .. } => {
             let mini_visible = app_handle

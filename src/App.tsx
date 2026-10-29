@@ -10,12 +10,14 @@ import { MiniStatusBar } from "./components/minimode/MiniStatusBar";
 import { useMeetingStore } from "./store/useMeetingStore";
 import { isMiniWindow, isTauriEnvironment } from "./utils/tauriWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { updateTracker } from "./store/updateStore";
+import { updateTracker, mountUpdater } from "./store/updateStore";
 import { Toaster } from "sonner";
 
 export const App: React.FC = () => {
   const { currentView, loadMeetings, checkStatus, selectMeeting } = useMeetingStore();
   const isMini = isMiniWindow();
+
+  useEffect(() => mountUpdater(), []);
 
   useEffect(() => {
     if (isMini) return;

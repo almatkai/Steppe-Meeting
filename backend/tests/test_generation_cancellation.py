@@ -70,18 +70,23 @@ class GenerationCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_stop_immediately_after_accept_is_owned_and_durable_then_explicit_rerun(self):
         self.seed_prior()
         prior = await self.meeting()
-        response = await self.post('generate')
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNotNone(server.generation_jobs.active(self.id))
-        duplicate = await self.post('generate')
-        self.assertEqual(duplicate.status_code, 409)
-        stop = await self.post('stop-generation')
-        self.assertEqual(stop.json()['status'], 'cancelled')
-        self.assertEqual((await self.post('stop-generation')).json()['status'], 'cancelled')
-        row = await self.meeting()
-        self.assertEqual(row['status'], 'cancelled')
-        for key in ('transcript_text', 'transcript_segments', 'protocol_ru', 'protocol_kz', 'summary_ru', 'summary_kz', 'template_values_ru', 'template_values_kz'):
-            self.assertEqual(row[key], prior[key])
+        async def pending_generation(**kwargs):
+            await asyncio.Future()
+        # ASGI middleware may yield before the response reaches the caller.
+        # Keep inference genuinely running when testing Stop ownership.
+        with patch.object(server.protocol, 'generate', pending_generation):
+            response = await self.post('generate')
+            self.assertEqual(response.status_code, 200)
+            self.assertIsNotNone(server.generation_jobs.active(self.id))
+            duplicate = await self.post('generate')
+            self.assertEqual(duplicate.status_code, 409)
+            stop = await self.post('stop-generation')
+            self.assertEqual(stop.json()['status'], 'cancelled')
+            self.assertEqual((await self.post('stop-generation')).json()['status'], 'cancelled')
+            row = await self.meeting()
+            self.assertEqual(row['status'], 'cancelled')
+            for key in ('transcript_text', 'transcript_segments', 'protocol_ru', 'protocol_kz', 'summary_ru', 'summary_kz', 'template_values_ru', 'template_values_kz'):
+                self.assertEqual(row[key], prior[key])
         await self.post('generate')
         await self.settle()
         self.assertEqual((await self.meeting())['status'], 'completed')
@@ -343,7 +348,10 @@ class GenerationCancellationTests(unittest.IsolatedAsyncioTestCase):
             db.execute("UPDATE meetings SET status='generating' WHERE id=?", (meeting,))
             db.execute("UPDATE recording_streams SET finalized=1 WHERE id='s'")
         manifest = {'session_id': 's', 'chunk_count': 1, 'duration_seconds': 1}
-        with patch.object(server.recording_streams, 'prepare_completion', prepare):
+        async def pending_generation(**kwargs):
+            await asyncio.Future()
+        with patch.object(server.recording_streams, 'prepare_completion', prepare), \
+             patch.object(server.protocol, 'generate', pending_generation):
             response = await self.post('process-recording', json=manifest)
             self.assertEqual(response.status_code, 200)
             self.assertIsNotNone(server.generation_jobs.active(self.id))

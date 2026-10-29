@@ -37,6 +37,56 @@ class UpdateAPITests(unittest.TestCase):
         self.addCleanup(self.checker_patch.stop)
         self.client = TestClient(server.app)
 
+    def test_loopback_cannot_install_and_work_is_fenced(self):
+        response = self.client.post("/api/v1/system/updates/native-install", json={"job_id":"test"})
+        self.assertEqual(response.status_code, 403)
+        with patch.object(server.updater, "installing", True):
+            response = self.client.post("/api/v1/meetings/create", json={"title":"blocked"})
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(self.client.get("/api/v1/system/updates/job").status_code, 200)
+
+    def test_historical_unfinalized_checkpoint_is_not_current_capture(self):
+        from recording_streams import RecordingStreams
+        streams = RecordingStreams(server.get_db, server.get_setting)
+        with server.get_db() as db:
+            db.execute("INSERT INTO meetings (id,title,status,audio_path,transcript_text,created_at) VALUES ('historical','uploaded','completed','fixture.wav','done','2020-01-01')")
+            db.execute("INSERT INTO recording_streams VALUES ('orphan','historical','{}',0)")
+            db.commit()
+        with patch.object(server, 'recording_streams', streams):
+            self.assertNotIn('recording', server.update_busy())
+            import asyncio
+            lock = asyncio.Lock()
+            asyncio.run(lock.acquire())
+            streams.locks['active-chunk'] = lock
+            self.assertIn('recording', server.update_busy())
+            lock.release()
+            self.assertNotIn('recording', server.update_busy())
+        # Backend restart has no live chunk owners and leaves checkpoint intact.
+        restarted = RecordingStreams(server.get_db, server.get_setting)
+        with patch.object(server, 'recording_streams', restarted):
+            self.assertNotIn('recording', server.update_busy())
+        with server.get_db() as db:
+            self.assertEqual(db.execute("SELECT finalized FROM recording_streams WHERE id='orphan'").fetchone()[0], 0)
+
+    def test_streamed_write_holds_fence_until_response_finishes(self):
+        import asyncio
+        from starlette.requests import Request
+        from starlette.responses import StreamingResponse
+        async def exercise():
+            async def body():
+                self.assertIn('request', server.update_busy())
+                yield b'first'
+                self.assertIn('request', server.update_busy())
+                yield b'last'
+            async def next_handler(request): return StreamingResponse(body())
+            request = Request({'type':'http', 'method':'POST', 'path':'/test-stream',
+                               'headers':[], 'scheme':'http', 'server':('test',80), 'query_string':b''})
+            response = await server.update_work_fence(request, next_handler)
+            self.assertIn('request', server.update_busy())
+            async for _ in response.body_iterator: pass
+            self.assertNotIn('request', server.update_busy())
+        asyncio.run(exercise())
+
     def test_model_discovery_uses_unsaved_connection_without_model_or_writes(self):
         server.set_setting("llm_base_url", "http://saved.invalid/v1")
         server.set_setting("llm_model", "saved-model")

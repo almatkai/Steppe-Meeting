@@ -1,8 +1,12 @@
 [package]
 name = "steppe-desktop"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 description = "Steppe Meeting Desktop"
 edition = "2021"
+
+[features]
+# Never enabled by build-beta.py; fixture binaries are rejected by its audit.
+packaged-updater-fixture = []
 
 [lib]
 name = "steppe_desktop_lib"

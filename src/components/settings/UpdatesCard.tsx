@@ -1,12 +1,16 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { ArrowsClockwise, CircleNotch, WarningCircle } from '@phosphor-icons/react';
-import { openRelease, updateTracker } from '../../store/updateStore';
+import { ArrowsClockwise } from '@phosphor-icons/react';
+import { openRelease, updateTracker, updateController } from '../../store/updateStore';
 import { relativeCheckTime, safeReleaseUrl, updateStatusText } from '../../utils/updateTracker';
 
+import { UpdateJobView } from './UpdateJobView';
+import { updateActive, updateDownloadUrl } from '../../utils/updateController';
+
 const focus = 'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-500';
-const button = `inline-flex items-center justify-center gap-2 px-3 py-2 text-xs rounded-lg border border-neutral-700 text-neutral-300 hover:bg-neutral-800 hover:text-white disabled:opacity-50 ${focus}`;
 export function UpdatesCard() {
   const state = useSyncExternalStore(updateTracker.subscribe, updateTracker.getSnapshot);
+  const job = useSyncExternalStore(updateController.subscribe, updateController.getSnapshot);
+  const active = updateActive(job);
   const [now, setNow] = useState(Date.now());
   const [openError, setOpenError] = useState('');
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(timer); }, []);
@@ -23,30 +27,24 @@ export function UpdatesCard() {
       <div className="sm:max-w-sm space-y-2">
         <div role="radiogroup" aria-label="Канал обновлений" className="grid grid-cols-2 p-1 rounded-xl bg-neutral-950 border border-neutral-800">
           {([['stable', 'Стабильный'], ['beta', 'Бета']] as const).map(([channel, label]) => <label key={channel} className={`relative min-h-9 flex items-center justify-center py-2 px-3 rounded-lg text-xs cursor-pointer has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-neutral-500 ${state.channel === channel ? 'bg-white text-neutral-950 font-semibold' : 'text-neutral-400 hover:text-white hover:bg-neutral-800/50'} ${!state.initialized ? 'opacity-50' : ''}`}>
-            <input type="radio" name="update-channel" value={channel} className="sr-only" checked={state.channel === channel} disabled={!state.initialized} onChange={() => { setOpenError(''); updateTracker.changeChannel(channel); }} />{label}
+            <input type="radio" name="update-channel" value={channel} className="sr-only" checked={state.channel === channel} disabled={!state.initialized || active} onChange={() => { setOpenError(''); updateController.reset(); updateTracker.changeChannel(channel); }} />{label}
           </label>)}
         </div>
         <p className="text-[11px] leading-relaxed text-neutral-400">Бета включает стабильные и предварительные сборки; они могут быть экспериментальными.</p>
-        <div role="status" aria-live="polite" className="text-[11px] text-neutral-400 flex flex-wrap gap-2">
-          {state.savingChannel ? 'Сохраняем канал…' : state.channelError ? `Не удалось сохранить канал: ${state.channelError}` : state.channelSaved ? 'Канал сохранён' : ''}
+        <div className="text-[11px] text-neutral-400 flex flex-wrap gap-2">
+          {state.savingChannel ? 'Сохраняем канал…' : state.channelError ? 'Не удалось сохранить канал' : state.channelSaved ? 'Канал сохранён' : ''}
           {state.channelError && <button type="button" className={`underline rounded ${focus}`} onClick={() => updateTracker.retryChannel()}>Повторить</button>}
         </div>
       </div>
     </div>
-    <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-neutral-800">
-      <div className="space-y-1 min-w-0">
-        <div role="status" aria-live="polite" className={`flex items-center gap-2 text-xs ${result?.status === 'available' ? 'text-white' : 'text-neutral-300'}`}>
-          {!!error && <WarningCircle className="w-4 h-4 shrink-0" />}
-          <span>{state.checking ? 'Проверяем GitHub…' : updateStatusText(result, state.error || openError, now)}</span>
-        </div>
-        {result?.checked_at && <p className="text-[11px] text-neutral-400">Проверено: {relativeCheckTime(result.checked_at, now)}</p>}
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {releaseUrl && <button type="button" className={button} onClick={() => { setOpenError(''); void openRelease(releaseUrl).catch(error => setOpenError(error instanceof Error ? error.message : String(error))); }}>Открыть релиз</button>}
-        <button type="button" className={button} disabled={state.checking || state.savingChannel} onClick={() => { setOpenError(''); void updateTracker.check(true); }}>
-          {state.checking && <CircleNotch className="w-3.5 h-3.5 animate-spin" />}Проверить
-        </button>
-      </div>
-    </div>
+    <UpdateJobView state={result?.installable === false && !active && job.stage === 'idle' ? { ...job, stage: 'failed', error: 'verification_unavailable' } : job} availableVersion={result?.status === 'available' ? result.latest_version : undefined}
+      status={state.checking ? 'Проверяем GitHub…' : updateStatusText(result, error ? 'Не удалось проверить обновления' : '', now)}
+      checked={active ? 'Канал нельзя изменить во время обновления' : result?.checked_at ? `Проверено: ${relativeCheckTime(result.checked_at, now)}` : undefined}
+      releaseUrl={updateDownloadUrl(job, safeReleaseUrl(job.target?.release_url) || releaseUrl)} checkDisabled={state.checking || state.savingChannel || !!state.channelError}
+      onBegin={() => { const target = result?.status === 'available' ? result : job.target; if (target) void updateController.begin(target); }}
+      onRecover={() => { void updateController.recover(); }}
+      onInstall={() => { void updateController.install(); }} onCancel={() => { void updateController.cancel(); }}
+      onCheck={() => { setOpenError(''); updateController.reset(); void updateController.refresh(); void updateTracker.check(true); }}
+      onManual={() => { const url = updateDownloadUrl(job, safeReleaseUrl(job.target?.release_url) || releaseUrl); if (url) void openRelease(url).catch(() => setOpenError('Не удалось открыть страницу загрузки')); }} />
   </section>;
 }

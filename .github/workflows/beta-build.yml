@@ -27,7 +27,7 @@ concurrency:
 jobs:
   macos-beta:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 100
     env:
       # apple-metal's availability-guarded APIs require the macOS 26 SDK.
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -67,6 +67,11 @@ jobs:
           cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - name: Build and verify distributable beta
         run: python3 scripts/build-beta.py
+      - name: Verify packaged updater handoff and explicit recovery
+        timeout-minutes: 65
+        run: |
+          python3 scripts/smoke-packaged-updater.py --app 'src-tauri/target/release/bundle/macos/Steppe Meeting.app'
+          python3 -c 'import json; assert json.load(open("build/packaged-updater-smoke.json"))["result"] == "PASS"'
       - name: Test native backend lifecycle
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib backend::tests --locked
       - name: Locate versioned beta output
@@ -90,4 +95,6 @@ jobs:
           name: steppe-beta-build-logs
           if-no-files-found: ignore
           retention-days: 7
-          path: build/*.log
+          path: |
+            build/*.log
+            build/packaged-updater-smoke.json

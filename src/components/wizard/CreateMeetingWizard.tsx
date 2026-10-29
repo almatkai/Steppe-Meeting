@@ -1,3 +1,5 @@
+import { acquireUpdateCapture } from "../../utils/updateCapture";
+import { createAudioDraftOwner } from "../../utils/audioDraftOwner";
 import React, { useState, useEffect, useRef } from "react";
 import {
   CloudArrowUp as UploadCloud,
@@ -31,6 +33,13 @@ import type { Participant, ProtocolTemplate } from "../../types";
 
 export const CreateMeetingWizard: React.FC = () => {
   const { selectMeeting, loadMeetings, setView, systemStatus } = useMeetingStore();
+
+  const audioOwner = useRef<ReturnType<typeof createAudioDraftOwner> | null>(null);
+  useEffect(() => {
+    const owner = createAudioDraftOwner(acquireUpdateCapture);
+    audioOwner.current = owner;
+    return () => { void owner.dispose().catch(console.error); };
+  }, []);
 
   // Wizard active step: defaults to Step 1
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
@@ -162,7 +171,7 @@ export const CreateMeetingWizard: React.FC = () => {
       }
 
       setTranscribeStatus("Загрузка аудиофайла на локальный сервер...");
-      await api.uploadAudio(meetingId, fileToTranscribe);
+      await audioOwner.current!.upload(fileToTranscribe, () => api.uploadAudio(meetingId!, fileToTranscribe));
 
       setTranscribeStatus("Локальная модель выполняет распознавание речи...");
       await api.transcribe(meetingId);
@@ -477,7 +486,7 @@ export const CreateMeetingWizard: React.FC = () => {
               <AudioDropZone
                 file={uploadedAudioFile}
                 onFileSelect={(file) => {
-                  setUploadedAudioFile(file);
+                  void audioOwner.current!.retain("file", file).then(() => setUploadedAudioFile(file)).catch(() => setErrorMessage("Не удалось защитить файл от перезапуска. Повторите выбор файла."));
                   if (!file) {
                     setDraftMeetingId(null);
                     setTranscriptText("");
@@ -489,7 +498,8 @@ export const CreateMeetingWizard: React.FC = () => {
 
             {inputTab === "record" && (
               <AudioRecorder
-                onAudioReady={(file) => {
+                onAudioReady={(file, lease) => {
+                  void audioOwner.current!.retain("record", file, lease).catch(() => setErrorMessage("Не удалось защитить запись от перезапуска"));
                   setRecordedAudioFile(file);
                   if (!file) {
                     setDraftMeetingId(null);

@@ -32,7 +32,12 @@ pub fn request_screen_capture_permission() -> bool {
 pub fn start_native_recording(
     record_mic: bool,
     state: State<'_, RecorderState>,
+    update: State<'_, crate::updater::UpdateState>,
 ) -> Result<String, String> {
+    let _capture_guard = update.capture_windows.lock().map_err(|e| e.to_string())?;
+    if update.installing.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Приложение готовится к обновлению.".into());
+    }
     let mut lock = state
         .0
         .lock()

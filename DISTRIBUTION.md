@@ -1,19 +1,22 @@
-# Steppe Meeting 0.2.0-beta.3 — beta distribution
+# Steppe Meeting 0.2.0-beta.4 — beta distribution
 
 Target: Apple Silicon (`arm64` / `aarch64`), macOS 15 or later. Intel builds are not produced by this packaging configuration.
 
-## Beta.3 changes
+## Beta.4 changes
 
-Final audio uploads from Mini and the wizard now retain an immutable, private
-content-addressed copy under Application Support for opt-in offline regression
-replays, surviving meeting deletion. A failed cache save returns an error for
-retry. Offline reference tests and full-reference metrics supplement time-bound
-anchors; private recordings and reports are never bundled. The custom
-Kazakh/Russian Whisper model exposes its observed speech-omission warning.
-Wav2Vec2-rukk was explicitly verified and selected for the requesting user;
-existing model preferences and defaults remain unchanged for all users. This
-release does not claim a universal STT completeness fix. See
-`docs/local-stt-regression.md` for evidence and limits.
+The primary «Обновить до X» action downloads a SHA256-pinned GitHub Releases DMG,
+checks the bundle, installs it atomically and restarts the app. Stable and beta
+channels are supported. Active capture, generation and retained audio drafts block
+installation; interrupted work requires a fresh install click. Verified health
+receipts confirm completion; explicit recovery restores the previous bundle.
+Manual download remains available for unsupported builds, verification failures
+and installation errors, including a non-writable Applications directory.
+
+Beta.2 and beta.3 only track releases: the user must manually install beta.4 once
+to bootstrap this updater. Application Support, recordings, model weights and
+STT/LLM preferences are preserved; no global default model changes are included.
+The build remains ad-hoc signed and is not notarized. Real user button interaction,
+keyboard focus and screen-reader behavior remain for interactive verification.
 
 ## Build and verify
 
@@ -27,12 +30,12 @@ This prepares pinned official runtime downloads and hash-checked PyPI wheels, bu
 
 The script applies `src-tauri/tauri.beta.conf.json` on top of the standard Tauri configuration. Runtime resources are scoped to this release overlay so `tauri dev` does not require downloading portable runtime inputs. A raw `tauri build` without this overlay is not the distributable beta workflow.
 
-Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests and native backend lifecycle tests to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
+Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests, native backend lifecycle tests and the isolated packaged updater handoff/recovery gate to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
 
 ```text
-build/release-0.2.0-beta.3-aarch64/
-  Steppe-Meeting_0.2.0-beta.3_aarch64.app
-  Steppe-Meeting_0.2.0-beta.3_aarch64.dmg
+build/release-0.2.0-beta.4-aarch64/
+  Steppe-Meeting_0.2.0-beta.4_aarch64.app
+  Steppe-Meeting_0.2.0-beta.4_aarch64.dmg
   SHA256SUMS
   app-content-manifest.json
   build-info.json

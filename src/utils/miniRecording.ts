@@ -11,6 +11,7 @@ export async function resetMiniRecording(
     retainFile: (saved: SavedRecording) => void;
     uploadAudio: (id: string, file: File) => Promise<unknown>;
     cancelSession: (id: string, sessionId: string) => Promise<unknown>;
+    releaseCapture?: () => void;
   },
 ) {
   await dependencies.cancelCaptions();
@@ -26,6 +27,7 @@ export async function resetMiniRecording(
     saved.uploaded = true;
   }
   await dependencies.cancelSession(saved.meetingId, recording.sessionId);
+  dependencies.releaseCapture?.();
 }
 
 export function appendCaption(previous: string, text: string): string {

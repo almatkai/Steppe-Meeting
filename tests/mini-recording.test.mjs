@@ -135,3 +135,13 @@ test("retrying a failed window restore never repeats accepted offline transcript
   assert.equal(transcriptions, 1);
   assert.equal(opens, 2);
 });
+
+test('Mini reset retains the update fence until final audio upload and cancellation succeed',async()=>{
+ const {resetMiniRecording}=await import('../src/utils/miniRecording.ts');
+ let released=0,saved,fail=true;
+ const deps={finishAudio:async()=>new File(['audio'],'test.webm'),cancelCaptions:async()=>{assert.equal(released,0);},releaseMicrophone:()=>{},retainFile:s=>saved=s,
+ uploadAudio:async()=>{assert.equal(released,0);if(fail)throw Error('upload failed');},cancelSession:async()=>{assert.equal(released,0);},releaseCapture:()=>released++};
+ const recording={meetingId:'m',sessionId:'s',recorder:{},chunks:[]};
+ await assert.rejects(resetMiniRecording(recording,deps),/upload failed/);assert.equal(released,0);assert.ok(saved.file);
+ fail=false;await resetMiniRecording({...recording,saved},deps);assert.equal(released,1);
+});

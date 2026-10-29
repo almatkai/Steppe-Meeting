@@ -63,6 +63,8 @@ from recording_streams import RecordingStreams
 from recording_cache import retain_recording
 from generation_jobs import GenerationJobs
 from release_updates import checker as update_checker
+from update_service import UpdateService
+import secrets
 from engine import cli_llm, chunking, docx_template, docx_preview, template_generation, template_profile, template_protocol, pdf_export, llm, prompts, protocol, summary, vector_store, embeddings, indexer, retriever, whisper_service
 
 # LLM telemetry is runtime data too, not a repo-relative directory.
@@ -427,6 +429,99 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 recording_streams = RecordingStreams(get_db, lambda key, default=None: get_setting(key, default))
 app.include_router(create_captions_router(get_setting, recording_streams))
+
+
+def update_busy():
+    reasons = []
+    if any(generation_jobs.active(key) for key in generation_jobs.jobs):
+        reasons.append("generation")
+    with get_db() as db:
+        if db.execute("SELECT 1 FROM meetings WHERE status IN ('transcribing','generating') LIMIT 1").fetchone():
+            reasons.append("processing")
+    # Durable transcript checkpoints are not capture ownership. Browser capture
+    # is fenced by native webview ownership; chunk work owns these process-local
+    # locks (including requests waiting for an earlier chunk). Restart orphans
+    # must remain recoverable without impersonating a live microphone.
+    if any(lock.locked() for lock in recording_streams.locks.values()):
+        reasons.append("recording")
+    if update_active_requests:
+        reasons.append("request")
+    return reasons
+
+
+update_active_requests = 0
+updater = UpdateService(DATA_DIR / "updates", update_checker, os.environ.get("STEPPE_APP_VERSION", "development"),
+                        lambda: get_update_channel(), update_busy)
+
+
+@app.middleware("http")
+async def update_work_fence(request: Request, call_next):
+    global update_active_requests
+    path = request.url.path
+    work = request.method != "GET" and not path.startswith("/api/v1/system/updates")
+    if work and updater.installing:
+        return JSONResponse(status_code=409, content={"detail": "Приложение готовится к обновлению. Дождитесь перезапуска."})
+    if work:
+        update_active_requests += 1
+        updater.activity()
+    try:
+        response = await call_next(request)
+    except BaseException:
+        if work:
+            update_active_requests -= 1
+        raise
+    if work:
+        iterator = response.body_iterator
+        async def counted_body():
+            global update_active_requests
+            try:
+                async for chunk in iterator:
+                    yield chunk
+            finally:
+                update_active_requests -= 1
+        response.body_iterator = counted_body()
+    return response
+
+
+class UpdateSelectionRequest(BaseModel):
+    selection_id: str = Field(max_length=64)
+
+
+class UpdateJobRequest(BaseModel):
+    job_id: str = Field(max_length=64)
+
+
+@app.get("/api/v1/system/updates/job")
+async def update_job_status():
+    return updater.state()
+
+
+@app.post("/api/v1/system/updates/download")
+async def update_download(req: UpdateSelectionRequest):
+    try:
+        return await updater.begin(req.selection_id)
+    except ValueError as error:
+        return JSONResponse(status_code=409, content={"detail": str(error), "error_code": "invalid_update_request"})
+
+
+@app.post("/api/v1/system/updates/cancel")
+async def update_cancel(req: UpdateJobRequest):
+    try:
+        return await updater.cancel(req.job_id)
+    except ValueError as error:
+        return JSONResponse(status_code=409, content={"detail": str(error), "error_code": "invalid_update_request"})
+
+
+@app.post("/api/v1/system/updates/native-install")
+async def update_native_install(req: UpdateJobRequest, request: Request):
+    token = os.environ.get("STEPPE_NATIVE_UPDATE_TOKEN", "")
+    if not token or not secrets.compare_digest(request.headers.get("x-steppe-native", ""), token):
+        raise HTTPException(403, "Установка доступна только из приложения.")
+    try:
+        return await updater.install(req.job_id)
+    except ValueError as error:
+        return JSONResponse(status_code=409, content={"detail": str(error), "error_code": "invalid_update_request"})
+
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -2261,7 +2356,8 @@ async def backend_health():
     # Readiness is independent of Ollama, STT dependencies and downloaded models.
     return {"service": "steppe-meeting", "backend_dir": str(BASE_DIR), "pid": os.getpid(),
             "app_version": os.environ.get("STEPPE_APP_VERSION", "development"),
-            "runtime": "bundled" if os.environ.get("STEPPE_BUNDLED_RUNTIME") == "1" else "development"}
+            "runtime": "bundled" if os.environ.get("STEPPE_BUNDLED_RUNTIME") == "1" else "development",
+            "update_receipt": os.environ.get("STEPPE_UPDATE_RECEIPT", "")}
 
 
 @app.get("/api/v1/system/status")
@@ -2537,7 +2633,10 @@ async def get_updates(
     arch: str = Query("", max_length=32),
     force: bool = False,
 ):
-    return await update_checker.check(current_version, channel or get_update_channel(), platform, arch, force)
+    result = await update_checker.check(current_version, channel or get_update_channel(), platform, arch, force)
+    if platform in ("darwin", "macos") and arch in ("aarch64", "arm64"):
+        return await updater.select(result)
+    return result
 
 
 @app.post("/api/v1/system/updates/channel")

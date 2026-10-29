@@ -80,7 +80,9 @@ fn select_backend_dir(resources: &Path, development: bool) -> PathBuf {
 }
 
 fn health(expected: &Path) -> Result<bool, String> {
-    let address: SocketAddr = "127.0.0.1:8008".parse().unwrap();
+    let address: SocketAddr = format!("127.0.0.1:{}", crate::updater::api_port())
+        .parse()
+        .unwrap();
     let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(400)) else {
         return Ok(false);
     };
@@ -113,7 +115,8 @@ fn health(expected: &Path) -> Result<bool, String> {
 fn compatible_identity(value: &serde_json::Value, expected: &Path, development: bool) -> bool {
     value["backend_dir"].as_str().map(Path::new) == Some(expected)
         && (development
-            || (value["app_version"] == env!("CARGO_PKG_VERSION") && value["runtime"] == "bundled"))
+            || (value["app_version"] == crate::updater::native_version()
+                && value["runtime"] == "bundled"))
 }
 
 fn start(app: tauri::AppHandle) -> Result<(), String> {
@@ -126,7 +129,10 @@ fn start(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(mut child) = owned.take() {
         stop_owned(&mut child);
     }
+    #[cfg(not(feature = "packaged-updater-fixture"))]
     let logs = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    #[cfg(feature = "packaged-updater-fixture")]
+    let logs = crate::updater::fixture_root().join("logs");
     fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
     let log_path = logs.join("backend.log");
     let log = OpenOptions::new()
@@ -138,9 +144,51 @@ fn start(app: tauri::AppHandle) -> Result<(), String> {
     let mut command = Command::new("/bin/bash");
     #[cfg(unix)]
     command.process_group(0);
+    let mut token_bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut token_bytes))
+        .map_err(|e| e.to_string())?;
+    let token: String = token_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    *app.state::<crate::updater::UpdateState>()
+        .token
+        .lock()
+        .map_err(|e| e.to_string())? = token.clone();
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    if let Some(bundle) = executable
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+    {
+        let identity = Command::new("/bin/ps")
+            .args([
+                "-p",
+                &std::process::id().to_string(),
+                "-o",
+                "lstart=",
+                "-o",
+                "comm=",
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        command
+            .env("STEPPE_NATIVE_APP", bundle)
+            .env("STEPPE_NATIVE_PID", std::process::id().to_string())
+            .env(
+                "STEPPE_NATIVE_IDENTITY",
+                String::from_utf8_lossy(&identity.stdout).trim(),
+            );
+    }
+    command.env("STEPPE_NATIVE_UPDATE_TOKEN", token);
+    #[cfg(feature = "packaged-updater-fixture")]
+    command
+        .env(
+            "STEPPE_DATA_DIR",
+            crate::updater::fixture_root().join("data"),
+        )
+        .env("DESKTOP_API_PORT", crate::updater::api_port().to_string());
     let mut child = command
         .arg(directory.join("run_backend.sh"))
-        .env("STEPPE_APP_VERSION", env!("CARGO_PKG_VERSION"))
+        .env("STEPPE_APP_VERSION", crate::updater::native_version())
         // The script resolves its own directory. Start from a stable system
         // directory so shell initialization need not resolve a Desktop path.
         .current_dir("/")
@@ -223,7 +271,7 @@ mod tests {
     fn production_rejects_previous_version_and_development_runtime() {
         let expected = Path::new("/Example.app/Contents/Resources/backend");
         let mut identity = serde_json::json!({
-            "backend_dir": expected, "app_version": env!("CARGO_PKG_VERSION"), "runtime": "bundled"
+            "backend_dir": expected, "app_version": crate::updater::native_version(), "runtime": "bundled"
         });
         assert!(compatible_identity(&identity, expected, false));
         identity["runtime"] = "development".into();

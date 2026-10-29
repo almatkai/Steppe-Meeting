@@ -1,3 +1,4 @@
+import { acquireUpdateCapture } from "../../utils/updateCapture";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Record, Stop, Microphone, MicrophoneSlash, ClosedCaptioning,
@@ -58,6 +59,8 @@ export const MiniStatusBar: React.FC = () => {
     timerRef.current = null;
   };
 
+  const releaseUpdateCapture = useRef<(() => Promise<void>) | null>(null);
+  const releaseCapture = () => { const release = releaseUpdateCapture.current; releaseUpdateCapture.current = null; void release?.().catch(console.error); };
   const releaseMicrophone = () => {
     micRef.current?.getTracks().forEach((track) => track.stop());
     micRef.current = null;
@@ -200,7 +203,7 @@ export const MiniStatusBar: React.FC = () => {
       document.documentElement.classList.remove("mini-mode");
       clearTimer();
       if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-      void stopCaptions().catch(console.error);
+      void stopCaptions().finally(releaseCapture).catch(console.error);
       micRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
@@ -244,6 +247,7 @@ export const MiniStatusBar: React.FC = () => {
     setRecordingSeconds(0); followCaptionsRef.current = true;
     chunksRef.current = []; savedRef.current = null; meetingIdRef.current = null;
     try {
+      releaseUpdateCapture.current = await acquireUpdateCapture();
       captionContextRef.current = preparedContext || new AudioContext();
       void captionContextRef.current.resume().catch(console.error);
       const now = new Date();
@@ -282,6 +286,7 @@ export const MiniStatusBar: React.FC = () => {
       meetingIdRef.current = null; sessionRef.current = null;
       if (recorderRef.current?.state === "recording") recorderRef.current.stop();
       await stopCaptions().catch(console.error);
+      releaseCapture();
       releaseMicrophone(); clearTimer();
       recorderRef.current = null;
       setStatus("idle");
@@ -350,6 +355,7 @@ export const MiniStatusBar: React.FC = () => {
       }
 
       await stopCaptions();
+      releaseCapture();
       setStatus("idle"); recorderRef.current = null; sessionRef.current = null;
       chunksRef.current = []; savedRef.current = null; meetingIdRef.current = null;
     } catch (error) {
@@ -372,7 +378,7 @@ export const MiniStatusBar: React.FC = () => {
         meetingId: meetingIdRef.current, sessionId: sessionRef.current,
         recorder: recorderRef.current, chunks: chunksRef.current, saved: savedRef.current,
       }, {
-        finishAudio: finishAudioFile, cancelCaptions: stopCaptions, releaseMicrophone,
+        finishAudio: finishAudioFile, cancelCaptions: stopCaptions, releaseMicrophone, releaseCapture,
         retainFile: (saved) => { savedRef.current = saved; },
         uploadAudio: api.uploadAudio, cancelSession: api.cancelRecording,
       });

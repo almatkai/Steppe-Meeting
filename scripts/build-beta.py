@@ -31,15 +31,24 @@ def run(command, timeout=240):
 def inputs():
     patterns = ["src/**/*", "src-tauri/src/**/*", "src-tauri/icons/*", "public/**/*",
                 "backend/*.py", "backend/engine/*.py", "backend/engine/core/*.py",
-                "backend/run_backend.sh", "backend/requirements*.txt", "backend/requirements*.lock"]
+                "backend/run_backend.sh", "backend/requirements*.txt", "backend/requirements*.lock",
+                "scripts/*.py", "scripts/updater-fixture/*", "tests/*.test.mjs", "tests/test_*.py",
+                "backend/tests/test_*.py", "docs/*updater*.md"]
     files = {p for pattern in patterns for p in ROOT.glob(pattern) if p.is_file()}
-    files.update(ROOT / p for p in ("package.json", "pnpm-lock.yaml", "src-tauri/Cargo.lock",
+    files.update(ROOT / p for p in (".github/workflows/beta-build.yml", "DISTRIBUTION.md", "package.json", "pnpm-lock.yaml", "src-tauri/Cargo.lock",
                                     "src-tauri/Cargo.toml", "src-tauri/tauri.conf.json", "src-tauri/tauri.beta.conf.json", "src-tauri/build.rs",
-                                    "src-tauri/Info.plist", "src-tauri/Entitlements.plist", "scripts/runtime-sources.json", "scripts/build-beta.py", "scripts/smoke-bundled-runtime.py", "scripts/smoke-stt-codecs.py"))
+                                    "src-tauri/Info.plist", "src-tauri/Entitlements.plist", "scripts/runtime-sources.json", "scripts/build-beta.py", "scripts/smoke-bundled-runtime.py", "scripts/smoke-stt-codecs.py", "scripts/smoke-packaged-updater.py", "scripts/updater-fixture/backend.py", "scripts/updater-fixture/index.html"))
     return {str(p.relative_to(ROOT)): sha(p) for p in sorted(files)}
 
 
+def reject_fixture_environment():
+    for key in ("CARGO_FEATURE_PACKAGED_UPDATER_FIXTURE", "STEPPE_FIXTURE_ROOT", "STEPPE_FIXTURE_PORT", "STEPPE_FIXTURE_VERSION"):
+        assert not os.environ.get(key), f"Fixture environment forbidden in shipping build: {key}"
+    assert "packaged-updater-fixture" not in " ".join(sys.argv[1:]), "Fixture flags forbidden"
+
+
 def native_build():
+    reject_fixture_environment()
     # Direct JS entry points avoid executable shell shims. Do not weaken macOS
     # policy or replace blocked binaries. Bound inactivity and stop our group.
     overlay = json.loads((ROOT / "src-tauri/tauri.beta.conf.json").read_text())
@@ -76,6 +85,7 @@ def native_build():
 
 def audit(app, stamp):
     resources = app / "Contents/Resources"
+    assert b"STEPPE_PACKAGED_UPDATER_FIXTURE_ONLY" not in (app / "Contents/MacOS/steppe-desktop").read_bytes(), "Refusing to ship fixture binary"
     config = json.loads((ROOT / "src-tauri/tauri.conf.json").read_text())
     config["bundle"]["resources"].update(json.loads((ROOT / "src-tauri/tauri.beta.conf.json").read_text())["bundle"]["resources"])
     expected = set()
@@ -111,6 +121,7 @@ def audit(app, stamp):
 
 
 def main():
+    reject_fixture_environment()
     assert platform.system() == "Darwin" and platform.machine() == "arm64", "Build on Apple Silicon macOS"
     BUILD.mkdir(exist_ok=True)
     package = json.loads((ROOT / "package.json").read_text())

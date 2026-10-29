@@ -1,0 +1,76 @@
+<!doctype html><meta charset="utf-8"><title>Isolated packaged updater fixture</title>
+<p>Temporary compiled updater fixture</p>
+<script>
+(async () => {
+ const invoke = window.__TAURI_INTERNALS__.invoke;
+ const port = FIXTURE_PORT;
+ const base = `http://127.0.0.1:${port}/api/v1/system`;
+ const jobId = 'a'.repeat(32);
+ const checks = [];
+ const assert = (v, name) => { if (!v) throw Error(name); checks.push(name); };
+ const report = value => invoke('updater_fixture', {action:'report',value});
+ const post = async action => {
+   const r = await fetch(`${base}/updates/fixture/${action}`, {method:'POST'});
+   if (!r.ok) throw Error(`fixture control ${action}: ${r.status}`);
+ };
+ try {
+   if (location.search.includes('mini')) {
+     let denied = false;
+     try { await invoke('install_update',{jobId}); } catch { denied = true; }
+     await report({label:'mini',checks:['non-main IPC denied'],passed:denied});
+     return;
+   }
+   await invoke('ensure_backend');
+   const health = await (await fetch(`${base}/health`)).json();
+   const state=await (await fetch(`${base}/updates/job`)).json();
+   if (state.stage==='rolled_back') {
+     checks.push('explicit rollback relaunched old bundled backend');
+     await report({label:'rollback',passed:true,checks,health});
+     await invoke('updater_fixture',{action:'exit',value:null});
+     return;
+   }
+   if (health.update_receipt) {
+     // Real updated app remains alive until helper confirms health. Then exercise
+     // explicit recovery through the very same authenticated IPC/helper path.
+     let state;
+     for (let i=0;i<150;i++) {
+       state=await (await fetch(`${base}/updates/job`)).json();
+       if(state.stage==='completed') break;
+       await new Promise(r=>setTimeout(r,200));
+     }
+     assert(state.stage==='completed','new bundled backend healthy receipt');
+     await report({label:'main',passed:true,checks,health});
+     await post('recover');
+     await invoke('install_update',{jobId});
+     return;
+   }
+   if (!location.search.includes('originchecked')) {
+     await invoke('updater_fixture',{action:'browser',value:null});
+     return;
+   }
+   await post('seed');
+   await post('readonly');
+   const permission = await invoke('install_update',{jobId});
+   await post('writable');
+   assert(permission.stage==='error'&&permission.error_code==='prepare_failed','permissions failure no exit');
+   await post('seed');
+   for(const token of ['', 'invalid-token']) {
+     const response=await fetch(`${base}/updates/native-install`,{method:'POST',
+       headers:{'Content-Type':'application/json','X-Steppe-Native':token},body:JSON.stringify({job_id:jobId})});
+     assert(response.status===403,token?'invalid token denied':'browser HTTP denied');
+   }
+   await invoke('set_update_capture_busy',{busy:true});
+   const busy=await invoke('install_update',{jobId});
+   assert(busy.stage==='deferred'&&busy.busy.includes('recording'),'native capture busy no exit');
+   await invoke('set_update_capture_busy',{busy:false});
+   await post('generation');
+   const gen=await invoke('install_update',{jobId});
+   assert(gen.stage==='deferred'&&gen.busy.includes('generation'),'generation busy no exit');
+   await post('clear');
+   await report({label:'old',passed:true,checks,health});
+   // Concurrent invocations exercise native serialization without a false error.
+   const results=await Promise.all([invoke('install_update',{jobId}),invoke('install_update',{jobId})]);
+   assert(results.every(v=>['preparing','awaiting_exit'].includes(v.stage)),'repeat install coalesced');
+ } catch(error) { await report({label:'failure',passed:false,error:String(error),checks}); }
+})();
+</script>
