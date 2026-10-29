@@ -227,7 +227,10 @@ class TransactionTests(unittest.TestCase):
         self.assertFalse(self.backup.exists())
 
     def test_exact_owned_real_process_wait_timeout_never_moves(self):
-        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)'])
+        # Wait for Python's launcher/exec handoff before pinning its identity.
+        process = subprocess.Popen([sys.executable, '-c', 'import time; print("ready", flush=True); time.sleep(10)'], stdout=subprocess.PIPE, text=True)
+        self.assertEqual(process.stdout.readline().strip(), 'ready')
+        process.stdout.close()
         self.addCleanup(lambda: (process.terminate(), process.wait()))
         self.config.update(pid=process.pid, identity=identity(process.pid))
         self.assertTrue(alive(process.pid, self.config['identity']))
@@ -236,7 +239,9 @@ class TransactionTests(unittest.TestCase):
         self.assertFalse(self.backup.exists())
 
     def test_owned_process_exits_then_real_bundle_transaction_runs(self):
-        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(.15)'])
+        process = subprocess.Popen([sys.executable, '-c', 'import time; print("ready", flush=True); time.sleep(.15)'], stdout=subprocess.PIPE, text=True)
+        self.assertEqual(process.stdout.readline().strip(), 'ready')
+        process.stdout.close()
         self.config.update(pid=process.pid, identity=identity(process.pid))
         try:
             self.assertEqual(self.execute(is_alive=alive, timeout=2), 'completed')
