@@ -1,8 +1,16 @@
-# Steppe Meeting 0.2.0-beta.4 — beta distribution
+# Steppe Meeting 0.2.0-beta.5 — beta distribution
 
 Target: Apple Silicon (`arm64` / `aarch64`), macOS 15 or later. Intel builds are not produced by this packaging configuration.
 
-## Beta.4 changes
+## Beta.5 distribution purpose
+
+Beta.5 has the same functionality as beta.4. It is built as a strictly newer
+update target so users who manually bootstrap beta.4 can personally test the
+one-click download, installation and restart flow. No feature changes or fixes
+are included in beta.5. Publication and interactive testing are separate steps;
+this document does not claim that either has already happened.
+
+## Functionality carried forward from beta.4
 
 The primary «Обновить до X» action downloads a SHA256-pinned GitHub Releases DMG,
 checks the bundle, installs it atomically and restarts the app. Stable and beta
@@ -33,9 +41,9 @@ The script applies `src-tauri/tauri.beta.conf.json` on top of the standard Tauri
 Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests, native backend lifecycle tests and the isolated packaged updater handoff/recovery gate to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
 
 ```text
-build/release-0.2.0-beta.4-aarch64/
-  Steppe-Meeting_0.2.0-beta.4_aarch64.app
-  Steppe-Meeting_0.2.0-beta.4_aarch64.dmg
+build/release-0.2.0-beta.5-aarch64/
+  Steppe-Meeting_0.2.0-beta.5_aarch64.app
+  Steppe-Meeting_0.2.0-beta.5_aarch64.dmg
   SHA256SUMS
   app-content-manifest.json
   build-info.json
