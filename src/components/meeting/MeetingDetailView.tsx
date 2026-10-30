@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   FileText,
   ListNumbers as ListOrdered,
@@ -19,12 +19,22 @@ import { SummaryView } from "./SummaryView";
 import { AiChatDrawer } from "./AiChatDrawer";
 import { api } from "../../services/api";
 import { useGenerationStop } from "../../utils/useGenerationStop";
+import type { GenerationRoute } from "../../types";
+import { canChooseGenerationRoute } from "../../utils/generationRetry";
+import { GenerationRoutePanel } from "./GenerationRoutePanel";
 
 export const MeetingDetailView: React.FC = () => {
   const { activeMeeting, refreshActiveMeeting, stopGeneration } = useMeetingStore();
   const [tab, setTab] = useState<"protocol" | "summary" | "transcript">("protocol");
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
+  const identity = useRef({ id: activeMeeting?.id });
+  if (identity.current.id !== activeMeeting?.id) identity.current = { id: activeMeeting?.id };
+  const selection = identity.current;
+  const inFlight = useRef(new Set<object>());
+  const [action, setAction] = useState<{ selection: object | null; loading: boolean; error: string }>({ selection: null, loading: false, error: '' });
+  const [routePanel, setRoutePanel] = useState<{ selection: object | null; open: boolean }>({ selection: null, open: false });
+  const actionLoading = action.selection === selection && action.loading;
+  const routePanelOpen = routePanel.selection === selection && routePanel.open;
   const { stopping, requestPending, requestStop, stopError, rerunRef } = useGenerationStop(activeMeeting, stopGeneration);
 
   // New recordings open directly on their transcript while the server processes
@@ -52,20 +62,31 @@ export const MeetingDetailView: React.FC = () => {
     );
   }
 
-  const handleStartGenerate = async () => {
+  const handleStartGenerate = async (route?: GenerationRoute) => {
     const id = activeMeeting.id;
+    if (inFlight.current.has(selection)) throw new Error('Запуск уже выполняется');
+    inFlight.current.add(selection);
+    setAction({ selection, loading: true, error: '' });
     try {
-      setActionLoading(true);
       if (!activeMeeting.transcript_text?.trim() && activeMeeting.audio_filename) {
         await api.transcribe(id);
       } else {
-        await api.generate(id);
+        const result = await api.generate(id, route);
+        // An accepted job must expose Stop/polling even if the following GET fails.
+        if (identity.current === selection && useMeetingStore.getState().activeMeetingId === id) {
+          useMeetingStore.setState(state => ({ activeMeeting: state.activeMeeting?.id === id ? {
+            ...state.activeMeeting, status: result.status,
+            generation_attempt: result.generation_attempt, error_message: '',
+          } : state.activeMeeting }));
+        }
       }
-      if (useMeetingStore.getState().activeMeetingId === id) await refreshActiveMeeting();
-    } catch (e: any) {
-      alert("Ошибка запуска генерации: " + e.message);
+      if (identity.current === selection && useMeetingStore.getState().activeMeetingId === id) await refreshActiveMeeting();
+    } catch (error) {
+      if (identity.current === selection && !route) setAction({ selection, loading: false, error: error instanceof Error ? error.message : String(error) });
+      throw error;
     } finally {
-      setActionLoading(false);
+      inFlight.current.delete(selection);
+      if (identity.current === selection) setAction(previous => ({ ...previous, loading: false }));
     }
   };
 
@@ -121,7 +142,7 @@ export const MeetingDetailView: React.FC = () => {
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       {/* Top Banner */}
       <div className="p-6 rounded-2xl bg-neutral-900/60 border border-neutral-800 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-3">
               <h2 className="text-xl font-bold text-white tracking-tight">
@@ -135,14 +156,14 @@ export const MeetingDetailView: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {!stopping && (activeMeeting.status === "transcribed" || activeMeeting.status === "error" || activeMeeting.status === "cancelled") && (
               <button
                 type="button"
                 ref={rerunRef}
-                onClick={handleStartGenerate}
+                onClick={() => { void handleStartGenerate().catch(() => {}); }}
                 disabled={actionLoading}
-                className="flex items-center gap-2 py-2 px-4 rounded-xl bg-white hover:bg-neutral-200 text-neutral-950 text-xs font-semibold transition-all shadow-md  active:scale-95 disabled:opacity-50"
+                className={`flex items-center gap-2 py-2 px-4 rounded-xl text-xs font-semibold transition-all disabled:opacity-50 ${routePanelOpen ? 'bg-neutral-800 border border-neutral-700 text-neutral-200 hover:bg-neutral-700' : 'bg-white hover:bg-neutral-200 text-neutral-950 shadow-md active:scale-95'}`}
               >
                 {actionLoading ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -224,6 +245,14 @@ export const MeetingDetailView: React.FC = () => {
             </p>
             <p className="font-mono text-[11px] break-all">{activeMeeting.error_message}</p>
           </div>
+        )}
+
+        {action.selection === selection && action.error && <p role="alert" className="text-xs text-rose-300">Не удалось запустить: {action.error}</p>}
+        {canChooseGenerationRoute(activeMeeting.status, activeMeeting.transcript_text || '', stopping) && (
+          <GenerationRoutePanel key={activeMeeting.id} meetingId={activeMeeting.id} lastAttempt={activeMeeting.generation_attempt}
+            busy={actionLoading} onStart={handleStartGenerate}
+            onOpenChange={open => { if (identity.current === selection) setRoutePanel({ selection, open }); }}
+            onSettings={() => useMeetingStore.getState().setView('settings')} />
         )}
 
         {/* Main Tabs */}

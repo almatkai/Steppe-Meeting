@@ -38,7 +38,7 @@ import uvicorn
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # Add current backend folder to python path
 BASE_DIR = Path(__file__).resolve().parent
@@ -58,6 +58,7 @@ DB_PATH = DATA_DIR / "meetings.db"
 
 # Import local engine modules
 from engine.config import settings
+from engine.generation_route import GenerationRoute, use_route
 from live_captions import create_router as create_captions_router
 from recording_streams import RecordingStreams
 from recording_cache import retain_recording
@@ -170,6 +171,7 @@ def init_db():
             ("template_id", "TEXT DEFAULT ''"),
             ("template_values_ru", "TEXT DEFAULT '{}'"),
             ("template_values_kz", "TEXT DEFAULT '{}'"),
+            ("generation_attempt", "TEXT DEFAULT '{}'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE meetings ADD COLUMN {col} {col_type}")
@@ -565,6 +567,88 @@ class CliTestRequest(CliRequest):
     model: Optional[str] = None
 
 
+class GenerateMeetingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["api", "cli"]
+    provider: Optional[Literal["api", "opencode", "codex", "claude", "antigravity"]] = None
+    model: Optional[str] = Field(default=None, max_length=512)
+
+
+def generation_config():
+    """Read one coherent saved configuration without mutating shared settings."""
+    with get_db() as conn:
+        values = dict(conn.execute("SELECT key,value FROM settings WHERE key IN ('llm_mode','llm_cli_provider','llm_cli','llm_base_url','llm_model','llm_api_key')"))
+    try:
+        cli = json.loads(values.get("llm_cli", "{}"))
+    except ValueError:
+        cli = {}
+    return {
+        "mode": values.get("llm_mode", "api"),
+        "provider": values.get("llm_cli_provider", "opencode"),
+        "cli": cli if isinstance(cli, dict) else {},
+        "base_url": values.get("llm_base_url", DEFAULT_LLM_URL),
+        "model": values.get("llm_model", DEFAULT_LLM_MODEL),
+        "api_key": values.get("llm_api_key", DEFAULT_LLM_KEY),
+    }
+
+
+def resolve_generation_route(request: GenerateMeetingRequest | None = None):
+    config = generation_config()
+    mode = request.mode if request else config["mode"]
+    provider = "api"
+    if mode == "cli":
+        provider = request.provider if request and request.provider else config["provider"]
+    if request and mode == "api" and request.provider not in (None, "api"):
+        raise ValueError("Для режима API выберите настроенный API-провайдер")
+    options = config["cli"].get(provider, {})
+    if not isinstance(options, dict):
+        options = {}
+    model = request.model if request and request.model is not None else options.get("model", "") if mode == "cli" else config["model"]
+    if not isinstance(model, str):
+        raise ValueError("Некорректное имя модели")
+    model = model.strip()
+    if any(character in model for character in ('\x00', '\n', '\r')) or len(model) > 512:
+        raise ValueError("Некорректное имя модели")
+    if mode == "cli":
+        path = options.get("path", "") or ""
+        cli_llm.validate(provider, path, model, require_model=True)
+        return GenerationRoute(mode, provider, model, path=path, timeout=settings.LLM_TIMEOUT)
+    if mode != "api":
+        raise ValueError("Неизвестный способ генерации")
+    parsed = urllib.parse.urlparse(config["base_url"])
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Укажите HTTP или HTTPS URL провайдера в Настройках AI")
+    if not model:
+        raise ValueError("Укажите модель для генерации")
+    return GenerationRoute(mode, "api", model, base_url=config["base_url"], api_key=config["api_key"], timeout=settings.LLM_TIMEOUT)
+
+
+def start_meeting_generation(meeting_id, route=None):
+    route = route or resolve_generation_route()
+    if generation_jobs.active(meeting_id):
+        raise ValueError("Generation already running")
+    attempt = {**route.identity(), "id": str(uuid.uuid4()), "started_at": datetime.now(timezone.utc).isoformat()}
+    with get_db() as conn:
+        conn.execute("UPDATE meetings SET generation_attempt=? WHERE id=?", (json.dumps(attempt), meeting_id))
+        conn.commit()
+
+    async def generate(id):
+        with use_route(route):
+            await run_recording_pipeline(id)
+    generation_jobs.start(meeting_id, generate)
+    return attempt
+
+
+def start_saved_meeting_generation(meeting_id):
+    """Auto handoff keeps saved transcription usable when settings need repair."""
+    try:
+        start_meeting_generation(meeting_id)
+        return "generating"
+    except ValueError as error:
+        write_generation_status(meeting_id, "error", "Не удалось начать генерацию: " + str(error))
+        return "error"
+
+
 class SystemConfigRequest(BaseModel):
     update_channel: Optional[Literal["stable", "beta"]] = None
     llm_mode: Optional[str] = None
@@ -721,12 +805,11 @@ async def process_recording(meeting_id: str, request: Optional[RecordingCompleti
         recording_streams.prepare_completion(conn, meeting_id, request.session_id,
                                              request.chunk_count, request.duration_seconds)
         conn.commit()
-    generation_jobs.start(meeting_id, run_recording_pipeline)
-    return {"meeting_id": meeting_id, "status": "generating"}
+    status = start_saved_meeting_generation(meeting_id)
+    return {"meeting_id": meeting_id, "status": status}
 
 
 async def run_recording_pipeline(meeting_id: str):
-    sync_generation_settings()
     await run_generation(meeting_id)
 
 
@@ -866,7 +949,7 @@ async def run_transcription(meeting_id: str, audio_path: str, auto_generate: boo
 
         if auto_generate:
             # Handoff is synchronous: once generating is visible, Stop has an owner.
-            generation_jobs.start(meeting_id, run_recording_pipeline)
+            start_saved_meeting_generation(meeting_id)
 
     except Exception as e:
         logger.exception("Transcription failed for meeting %s: %s", meeting_id, e)
@@ -877,7 +960,7 @@ async def run_transcription(meeting_id: str, audio_path: str, auto_generate: boo
             conn.commit()
 
 @app.post("/api/v1/meetings/{meeting_id}/generate")
-async def generate_meeting(meeting_id: str):
+async def generate_meeting(meeting_id: str, request: GenerateMeetingRequest | None = None):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
         if not row:
@@ -886,8 +969,51 @@ async def generate_meeting(meeting_id: str):
             raise HTTPException(409, "Обработка совещания уже выполняется.")
         if not (row["transcript_text"] or "").strip():
             raise HTTPException(400, "Meeting has no transcript to generate from")
-    generation_jobs.start(meeting_id, run_recording_pipeline)
-    return {"meeting_id": meeting_id, "status": "generating"}
+    try:
+        route = resolve_generation_route(request)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    attempt = start_meeting_generation(meeting_id, route)
+    return {"meeting_id": meeting_id, "status": "generating", "generation_attempt": attempt}
+
+
+@app.get("/api/v1/meetings/{meeting_id}/generation-options")
+async def generation_options(meeting_id: str):
+    with get_db() as conn:
+        row = conn.execute("SELECT generation_attempt FROM meetings WHERE id=?", (meeting_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Meeting not found")
+    config = generation_config()
+    providers = [{"mode": "api", "provider": "api", "label": "API из настроек", "model": config["model"],
+                  "requires_model": True, "supports_models": True}]
+    for provider, label in (("opencode", "OpenCode"), ("codex", "Codex CLI"), ("claude", "Claude Code"), ("antigravity", "Antigravity")):
+        options = config["cli"].get(provider, {})
+        providers.append({"mode": "cli", "provider": provider, "label": label,
+                          "model": options.get("model", "") if isinstance(options, dict) else "",
+                          "requires_model": provider == "opencode", "supports_models": provider in ("opencode", "antigravity")})
+    default = next((choice for choice in providers if choice["mode"] == config["mode"] and choice["provider"] == (config["provider"] if config["mode"] == "cli" else "api")), providers[0])
+    return {"default": {key: default[key] for key in ("mode", "provider", "model")},
+            "providers": providers, "last_attempt": json.loads(row["generation_attempt"] or "{}") or None}
+
+
+@app.get("/api/v1/meetings/{meeting_id}/generation-models")
+async def generation_models(meeting_id: str, mode: Literal["api", "cli"],
+                            provider: Optional[Literal["api", "opencode", "codex", "claude", "antigravity"]] = None):
+    with get_db() as conn:
+        if not conn.execute("SELECT id FROM meetings WHERE id=?", (meeting_id,)).fetchone():
+            raise HTTPException(404, "Meeting not found")
+    config = generation_config()
+    if mode == "api":
+        if provider not in (None, "api"):
+            raise HTTPException(422, "Для режима API выберите настроенный API-провайдер")
+        models = await discover_api_models(config["base_url"].rstrip("/"), config["api_key"])
+        return {"provider": "api", "models": [{"id": model, "name": model, "provider": "api", "free": None} for model in models],
+                "pricing_available": False, "fetched_at": datetime.now(timezone.utc).isoformat()}
+    provider = provider or config["provider"]
+    if provider not in cli_llm.PROVIDERS:
+        raise HTTPException(422, "Неизвестный CLI провайдер")
+    options = config["cli"].get(provider, {})
+    return await cli_llm.models(provider, (options.get("path", "") or "") if isinstance(options, dict) else "")
 
 
 @app.post("/api/v1/meetings/{meeting_id}/stop-generation")
@@ -1073,6 +1199,7 @@ async def get_meeting(meeting_id: str):
         data["template_values_ru"] = json.loads(data.get("template_values_ru") or "{}")
         data["template_values_kz"] = json.loads(data.get("template_values_kz") or "{}")
         data["template_id"] = data.get("template_id") or ""
+        data["generation_attempt"] = json.loads(data.get("generation_attempt") or "{}") or None
         return data
 
 @app.patch("/api/v1/meetings/{meeting_id}")

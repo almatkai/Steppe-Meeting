@@ -1,8 +1,28 @@
-# Steppe Meeting 0.2.0-beta.7 — beta distribution
+# Steppe Meeting 0.2.0-beta.8 — beta distribution
 
 Target: Apple Silicon (`arm64` / `aarch64`), macOS 15 or later. Intel builds are not produced by this packaging configuration.
 
-## Beta.7: automatic-update capability detection
+## Beta.8: retry generation with another provider or model
+
+Meetings with a saved transcript show «Другой провайдер или модель» beneath the
+generation error or stopped state. The panel offers OpenCode, Codex CLI, Claude
+Code, Antigravity and the configured HTTP API. Model discovery does not send an
+inference request; manual entry remains available when discovery fails.
+
+«Запустить: …» uses the chosen route only for this attempt. It does not save AI
+settings or transcribe audio again. Every generation stage uses one frozen route,
+with no automatic provider/model fallback. Failed or cancelled attempts preserve
+audio, transcript and the previous completed results. New results replace the
+previous set only after the entire generation succeeds.
+
+The shipping-interface regression uses intercepted fake HTTP to verify provider
+switching, exact model variants, retained drafts, inline errors and Stop after an
+accepted request. It makes no real CLI/model calls and consumes no user quota.
+
+Beta.7 can update to beta.8 through the in-app beta channel. Beta.6 and older
+still need one manual installation directly to beta.8, as described below.
+
+## Automatic-update capability detection carried forward from beta.7
 
 The shipping frontend now receives the validated macOS ARM64 build target before
 Vite compiles it. The update button and release-check platform/architecture use
@@ -11,7 +31,8 @@ so they displayed only manual download even when an installable update existed.
 GitHub release metadata cannot repair JavaScript already installed in those apps.
 
 **Beta.2–beta.6 (and earlier builds) require a one-time manual DMG installation of
-beta.7.** After that bootstrap, supported packaged main windows can use Settings →
+beta.8.** Beta.7 introduced the corrected capability detection; no intermediate
+beta.7 installation is required. After that bootstrap, supported packaged main windows can use Settings →
 Updates → Beta → Check → «Обновить до …» for future releases. Browser, development,
 Mini, unsupported platform and unsupported architecture guards remain enforced.
 
@@ -69,12 +90,12 @@ This prepares pinned official runtime downloads and hash-checked PyPI wheels, bu
 
 The script applies `src-tauri/tauri.beta.conf.json` on top of the standard Tauri configuration. Runtime resources are scoped to this release overlay so `tauri dev` does not require downloading portable runtime inputs. A raw `tauri build` without this overlay is not the distributable beta workflow.
 
-Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests, native backend lifecycle tests, the shipping frontend button/query/embedded-JavaScript gates and the isolated packaged updater handoff/recovery gate to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
+Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests, native backend lifecycle tests, the shipping frontend button/query/embedded-JavaScript gates, both generation retry panel gates (built frontend and embedded JavaScript), and the isolated packaged updater handoff/recovery gate to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
 
 ```text
-build/release-0.2.0-beta.7-aarch64/
-  Steppe-Meeting_0.2.0-beta.7_aarch64.app
-  Steppe-Meeting_0.2.0-beta.7_aarch64.dmg
+build/release-0.2.0-beta.8-aarch64/
+  Steppe-Meeting_0.2.0-beta.8_aarch64.app
+  Steppe-Meeting_0.2.0-beta.8_aarch64.dmg
   SHA256SUMS
   app-content-manifest.json
   build-info.json

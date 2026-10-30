@@ -398,10 +398,14 @@ class GenerationCancellationTests(unittest.IsolatedAsyncioTestCase):
                     model = 'exact-model'
                 binary.write_text(f'#!{Path(sys.executable).resolve()}\n' + source)
                 binary.chmod(0o700)
-                with patch.object(server.protocol, 'generate', real_llm), \
-                     patch.object(llm.settings, 'LLM_MODE', 'cli'), \
-                     patch.object(llm.settings, 'LLM_CLI_PROVIDER', provider), \
-                     patch.object(llm.settings, 'LLM_CLI', {provider: {'path': str(binary), 'model': model}}):
+                # Jobs snapshot the saved config now, rather than mutable global
+                # settings. Keep this real process cancellation test at that seam.
+                with server.get_db() as db:
+                    for key, value in {'llm_mode': 'cli', 'llm_cli_provider': provider,
+                                       'llm_cli': json.dumps({provider: {'path': str(binary), 'model': model}})}.items():
+                        db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)', (key, value))
+                    db.commit()
+                with patch.object(server.protocol, 'generate', real_llm):
                     await self.post('generate')
                     async with asyncio.timeout(5):
                         while True:

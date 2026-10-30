@@ -141,6 +141,7 @@ def main():
     run(["node", "node_modules/typescript/bin/tsc", "-b"])
     frontend_build()
     run(["node", "scripts/smoke-shipping-frontend.mjs", "--dist", "dist", "--matrix"], timeout=240)
+    run(["node", "scripts/smoke-generation-retry.mjs"], timeout=120)
     source = inputs()
     stamp = {"version": version, "platform": "darwin", "arch": "aarch64", "source_head": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(), "source_files": source,
@@ -151,6 +152,8 @@ def main():
     run(["node", "scripts/verify-embedded-frontend.mjs"])
     run(["node", "scripts/smoke-shipping-frontend.mjs", "--dist", "build/embedded-frontend",
          "--receipt", "build/embedded-frontend-smoke.json"], timeout=120)
+    run(["node", "scripts/smoke-generation-retry.mjs", "--dist", "build/embedded-frontend",
+         "--out", "build/generation-retry-embedded"], timeout=120)
     assert inputs() == source, "Source changed during native build; rebuild before distributing"
     built = ROOT / "src-tauri/target/release/bundle/macos/Steppe Meeting.app"
     manifest = audit(built, stamp)

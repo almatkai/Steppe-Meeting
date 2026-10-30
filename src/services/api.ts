@@ -1,4 +1,4 @@
-import type { ReleaseUpdate, UpdateChannel, CliProviderId, CliCheckResult, CliModelsResult, CliTestResult } from "../types";
+import type { ReleaseUpdate, UpdateChannel, CliProviderId, CliCheckResult, CliModelsResult, CliTestResult, GenerationRoute, GenerationOptions, GenerationModelsResult, GenerationStartResult } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import type { CaptionChunk, CaptionResult, StreamingTranscript } from "../utils/liveCaptions";
 import type { Meeting, Participant, SystemConfig, SystemStatus, WhisperStatus, ChatSession, ChatMessage, Citation, ProtocolTemplate, ProtocolTemplateSlot, TemplateTestResult } from "../types";
@@ -52,6 +52,14 @@ async function recordingResponse(res: Response): Promise<any> {
       throw new Error("Приложение отправило неполные или некорректные данные. Обновите приложение и повторите действие.");
     }
     throw new Error(`Ошибка сервера (${res.status})`);
+  }
+  return res.json();
+}
+
+async function generationResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(typeof body?.detail === 'string' ? body.detail : `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -152,12 +160,28 @@ export const api = {
     return res.json();
   },
 
-  async generate(meetingId: string): Promise<any> {
+  async generationOptions(meetingId: string): Promise<GenerationOptions> {
+    return generationResponse(await backendFetch(`${API_BASE}/meetings/${encodeURIComponent(meetingId)}/generation-options`, {
+      signal: AbortSignal.timeout(15000),
+    }));
+  },
+
+  async generationModels(meetingId: string, mode: GenerationRoute['mode'], provider: GenerationRoute['provider']): Promise<GenerationModelsResult> {
+    const query = new URLSearchParams({ mode, ...(mode === 'cli' ? { provider } : {}) });
+    return generationResponse(await backendFetch(`${API_BASE}/meetings/${encodeURIComponent(meetingId)}/generation-models?${query}`, {
+      signal: AbortSignal.timeout(20000),
+    }));
+  },
+
+  async generate(meetingId: string, route?: GenerationRoute): Promise<GenerationStartResult> {
     const res = await backendFetch(`${API_BASE}/meetings/${meetingId}/generate`, {
       method: "POST",
+      ...(route ? {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: route.mode, provider: route.provider, model: route.model }),
+      } : {}),
     });
-    if (!res.ok) throw new Error(`Failed to start generation: ${res.statusText}`);
-    return res.json();
+    return generationResponse(res);
   },
 
   async updateMeeting(meetingId: string, data: Partial<Meeting> & { template_id?: string }): Promise<any> {

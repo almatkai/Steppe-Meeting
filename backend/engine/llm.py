@@ -17,6 +17,7 @@ import httpx
 
 from .core import lazy_client
 from .config import settings
+from .generation_route import current_route
 from . import telemetry
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,9 @@ async def _call(
     await _save_call_log(log_path, log_record)
     await telemetry.emit('llm_started', **details,
                          prompt_chars=sum(len(str(m.get('content', ''))) for m in messages))
-    request = asyncio.create_task(client().post(url, json=payload, headers=headers))
+    route = current_route()
+    request_options = {'timeout': route.timeout} if route else {}
+    request = asyncio.create_task(client().post(url, json=payload, headers=headers, **request_options))
     try:
         while not request.done():
             done, _ = await asyncio.wait([request], timeout=30)
@@ -210,12 +213,13 @@ async def _call_local(
     messages: list, temperature: float, json_mode: bool = True,
     max_tokens: int | None = None,
 ) -> str:
-    headers = get_auth_headers(settings.LLM_API_KEY)
-    url = get_chat_completions_url(settings.LLM_BASE_URL)
+    route = current_route()
+    headers = get_auth_headers(route.api_key if route else settings.LLM_API_KEY)
+    url = get_chat_completions_url(route.base_url if route else settings.LLM_BASE_URL)
 
     return await _call(
         url,
-        settings.LLM_MODEL,
+        route.model if route else settings.LLM_MODEL,
         headers,
         messages,
         temperature,
@@ -280,8 +284,9 @@ def _parse(content: str) -> dict:
 
 async def _call_cli(messages, *, json_mode=False):
     from . import cli_llm
-    provider = settings.LLM_CLI_PROVIDER
-    options = settings.LLM_CLI.get(provider, {})
+    route = current_route()
+    provider = route.provider if route else settings.LLM_CLI_PROVIDER
+    options = {'path': route.path, 'model': route.model} if route else settings.LLM_CLI.get(provider, {})
     call_id = uuid.uuid4().hex[:12]
     started = time.monotonic()
     details = {'call_id': call_id, 'provider': f'cli:{provider}', 'model': options.get('model', '')}
@@ -292,7 +297,7 @@ async def _call_cli(messages, *, json_mode=False):
     await telemetry.emit('llm_started', **details, prompt_chars=sum(len(str(m.get('content', ''))) for m in messages))
     try:
         result = await cli_llm.complete(provider, options.get('path', ''), options.get('model', ''), messages,
-                                        json_mode=json_mode, timeout=settings.LLM_TIMEOUT)
+                                        json_mode=json_mode, timeout=route.timeout if route else settings.LLM_TIMEOUT)
         record['response'] = result
         await telemetry.emit('llm_completed', **details, elapsed_seconds=round(time.monotonic()-started, 2))
         return result
@@ -313,13 +318,21 @@ async def _call_cli(messages, *, json_mode=False):
 
 async def complete_messages(messages, temperature=0.3):
     """One selected desktop provider; preserves roles for chat/edit endpoints."""
-    if settings.LLM_MODE == 'cli':
+    route = current_route()
+    if (route.mode if route else settings.LLM_MODE) == 'cli':
         return await _call_cli(messages)
     return await _call_local(messages, temperature, json_mode=False)
 
 
 async def complete_json(messages: list[dict], temperature: float = 0.1) -> dict:
     """Ask the model for a JSON object, trying both providers before failing."""
+    route = current_route()
+    if route:
+        # A meeting attempt has exactly one selected destination. In particular,
+        # legacy OPENAI_API_KEY must never turn its failure into a paid fallback.
+        if route.mode == 'cli':
+            return _parse(await _call_cli(messages, json_mode=True))
+        return _parse(await _call_local(messages, temperature))
     if settings.LLM_MODE == 'cli':
         return _parse(await _call_cli(messages, json_mode=True))
     local = ('local', _call_local)
@@ -362,6 +375,11 @@ async def complete_text(prompt: str, temperature: float = 0.5) -> str:
     streaming. Tries both providers before failing, the same fallback
     order complete_json and stream_chat already use."""
     messages = [{'role': 'user', 'content': prompt}]
+    route = current_route()
+    if route:
+        if route.mode == 'cli':
+            return await _call_cli(messages)
+        return await _call_local(messages, temperature, json_mode=False, max_tokens=300)
     if settings.LLM_MODE == 'cli':
         return await _call_cli(messages)
     local = (
@@ -462,11 +480,12 @@ async def _stream(url: str, model: str, headers: dict, messages: list, temperatu
 
 
 async def _stream_local(messages: list, temperature: float):
-    headers = get_auth_headers(settings.LLM_API_KEY)
-    url = get_chat_completions_url(settings.LLM_BASE_URL)
+    route = current_route()
+    headers = get_auth_headers(route.api_key if route else settings.LLM_API_KEY)
+    url = get_chat_completions_url(route.base_url if route else settings.LLM_BASE_URL)
 
     async for chunk in _stream(
-        url, settings.LLM_MODEL,
+        url, route.model if route else settings.LLM_MODEL,
         headers, messages, temperature,
     ):
         yield chunk
@@ -485,7 +504,8 @@ async def _stream_openai(messages: list, temperature: float):
 
 async def stream_messages(messages, temperature=0.3):
     """Desktop direct chat uses its selected provider without API fallbacks."""
-    if settings.LLM_MODE == 'cli':
+    route = current_route()
+    if (route.mode if route else settings.LLM_MODE) == 'cli':
         yield await _call_cli(messages)
         return
     async for chunk in _stream_local(messages, temperature):
@@ -503,6 +523,14 @@ async def stream_chat(
     different models is worse than an honest cutoff. See
     docs/superpowers/specs/2026-08-10-ai-chatbot-design.md section 5.
     """
+    route = current_route()
+    if route:
+        if route.mode == 'cli':
+            yield await _call_cli(messages)
+        else:
+            async for chunk in _stream_local(messages, temperature):
+                yield chunk
+        return
     if settings.LLM_MODE == 'cli':
         # CLI adapters return only the completed assistant answer. No partial
         # persistence on provider errors; callers retain their SSE envelope.

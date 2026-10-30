@@ -87,6 +87,26 @@ export interface Meeting {
   template_id?: string;
   template_values_ru?: Record<string, any>;
   template_values_kz?: Record<string, any>;
+  generation_attempt?: GenerationAttempt | null;
+}
+
+export interface GenerationRoute {
+  mode: 'api' | 'cli';
+  provider: 'api' | CliProviderId;
+  model: string;
+}
+export interface GenerationAttempt extends GenerationRoute { id: string; started_at: string }
+export interface GenerationProviderOption extends GenerationRoute {
+  label: string; requires_model: boolean; supports_models: boolean;
+}
+export interface GenerationOptions {
+  default: GenerationRoute;
+  providers: GenerationProviderOption[];
+  last_attempt: GenerationAttempt | null;
+}
+export interface GenerationModelsResult extends Omit<CliModelsResult, 'provider'> { provider: GenerationRoute['provider'] }
+export interface GenerationStartResult {
+  meeting_id: string; status: Meeting['status']; generation_attempt?: GenerationAttempt;
 }
 
 export interface STTModelRecommendation {

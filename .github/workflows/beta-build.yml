@@ -99,6 +99,8 @@ jobs:
           path: |
             build/*.log
             build/packaged-updater-smoke.json
+            build/generation-retry-ui/
+            build/generation-retry-embedded/
             build/shipping-frontend-smoke.json
             build/embedded-frontend-verification.json
             build/embedded-frontend-smoke.json
