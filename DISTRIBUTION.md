@@ -1,6 +1,17 @@
-# Steppe Meeting 0.2.0-beta.8 — beta distribution
+# Steppe Meeting 0.2.0-beta.9 — beta distribution
 
 Target: Apple Silicon (`arm64` / `aarch64`), macOS 15 or later. Intel builds are not produced by this packaging configuration.
+
+## Beta.9: internal download, then explicit update
+
+The update card now separates «Скачать обновление» from «Обновить и перезапустить».
+The first action downloads and verifies the GitHub DMG inside Steppe. A verified
+ready package never installs automatically: the second click applies the update
+and restarts the app. No release page or browser is opened. Existing busy,
+capture, checksum, signature, cancellation and rollback protections are retained.
+Publication is a separate step after the verified build. Beta.7 and beta.8 can
+update to this version through their existing in-app updater. Once beta.9 is
+running, every future update waits for the separate apply/restart click.
 
 ## Beta.8: retry generation with another provider or model
 
@@ -19,8 +30,8 @@ The shipping-interface regression uses intercepted fake HTTP to verify provider
 switching, exact model variants, retained drafts, inline errors and Stop after an
 accepted request. It makes no real CLI/model calls and consumes no user quota.
 
-Beta.7 can update to beta.8 through the in-app beta channel. Beta.6 and older
-still need one manual installation directly to beta.8, as described below.
+Beta.6 and older still need one manual installation directly to beta.9, as
+described below. No intermediate beta.7 or beta.8 installation is required.
 
 ## Automatic-update capability detection carried forward from beta.7
 
@@ -31,9 +42,10 @@ so they displayed only manual download even when an installable update existed.
 GitHub release metadata cannot repair JavaScript already installed in those apps.
 
 **Beta.2–beta.6 (and earlier builds) require a one-time manual DMG installation of
-beta.8.** Beta.7 introduced the corrected capability detection; no intermediate
+beta.9.** Beta.7 introduced the corrected capability detection; no intermediate
 beta.7 installation is required. After that bootstrap, supported packaged main windows can use Settings →
-Updates → Beta → Check → «Обновить до …» for future releases. Browser, development,
+Updates → Beta → Check for future releases. Beta.9 uses «Скачать обновление»
+then «Обновить и перезапустить». Browser, development,
 Mini, unsupported platform and unsupported architecture guards remain enforced.
 
 The build gate runs the actual shipping index/assets with read-only fake release
@@ -64,13 +76,14 @@ are unchanged. No private recordings or benchmark artifacts accompany the build.
 
 ## Functionality carried forward from beta.4
 
-The primary «Обновить до X» action downloads a SHA256-pinned GitHub Releases DMG,
-checks the bundle, installs it atomically and restarts the app. Stable and beta
+«Скачать обновление» downloads a SHA256-pinned GitHub Releases DMG. After the file
+is ready, «Обновить и перезапустить» checks the bundle, installs it atomically and
+restarts the app. Stable and beta
 channels are supported. Active capture, generation and retained audio drafts block
 installation; interrupted work requires a fresh install click. Verified health
 receipts confirm completion; explicit recovery restores the previous bundle.
-Manual download remains available for unsupported builds, verification failures
-and installation errors, including a non-writable Applications directory.
+Unsupported builds, verification failures and installation errors show an inline
+reason. The update card does not open a website or browser as a fallback.
 
 Beta.4–beta.6 also require the one-time manual bootstrap described above; their
 shipping capability gate was broken. Beta.2/beta.3 and earlier remain manual too. Application Support, recordings, model weights and
@@ -93,9 +106,9 @@ The script applies `src-tauri/tauri.beta.conf.json` on top of the standard Tauri
 Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests, native backend lifecycle tests, the shipping frontend button/query/embedded-JavaScript gates, both generation retry panel gates (built frontend and embedded JavaScript), and the isolated packaged updater handoff/recovery gate to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
 
 ```text
-build/release-0.2.0-beta.8-aarch64/
-  Steppe-Meeting_0.2.0-beta.8_aarch64.app
-  Steppe-Meeting_0.2.0-beta.8_aarch64.dmg
+build/release-0.2.0-beta.9-aarch64/
+  Steppe-Meeting_0.2.0-beta.9_aarch64.app
+  Steppe-Meeting_0.2.0-beta.9_aarch64.dmg
   SHA256SUMS
   app-content-manifest.json
   build-info.json

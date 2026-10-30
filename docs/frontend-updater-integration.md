@@ -1,5 +1,23 @@
 # Frontend updater integration handoff
 
+## Two-step internal update flow (next beta, 2026-10-30)
+
+«Скачать обновление» starts only the backend's pinned, verified download. Ready
+always waits for an explicit «Обновить и перезапустить» click. `autoEligible` is
+informational. No poll, mount, restore, activity-clear or download-completion
+path calls `install_update`. The existing native/backend capture fences and
+transactional installer remain authoritative.
+
+The update card has no release-page links, opener calls or manual-download
+buttons in any state. Unsupported runtimes show the exact browser, development,
+Mini, missing-target or platform reason. Recovery is an explicit native action;
+an uncertain transaction never claims that a previous bundle is safe.
+
+The shipping UI gate uses a fake stateful download and native IPC. It observes at
+least four ready polls, verifies zero install calls, then clicks the real apply
+button and verifies exactly one install call. All HTTP is intercepted; no actual
+download, application installation, restart or browser opening occurs.
+
 ## Beta.7 shipping capability regression (2026-10-30)
 
 The beta.4–beta.6 Vite subprocess ran before Tauri supplied its target variables.
@@ -13,7 +31,8 @@ uses the actual shipping build function and opens the unmodified shipping index
 and compiled assets. Read-only fake HTTP/IPC supplies future release metadata;
 the real Settings action and release request are asserted. Browser, Mini, dev,
 unsupported target and missing metadata remain restricted. Every HTTP request is
-intercepted before opening a socket; no download/install action is clicked.
+intercepted before opening a socket; current gates click only intercepted fake
+download/install actions and reject all opener IPC.
 The build additionally recovers the exact tested JavaScript from the signed Mach-O
 and reruns the production UI gate on those bytes. This closes the earlier fixture
 coverage gap; it does not claim a real user's native installation test.
@@ -37,12 +56,12 @@ so checksum/network/disk specificity is limited until it supplies stable error c
 App mounts the singleton observer in every window; Settings navigation does not own its
 lifetime. Channel writes lock during a job; background release checks cannot replace its
 frozen target. Wizard/Mini acquire the documented native capture fence before media and
-release after capture/chunks settle. A local event plus BroadcastChannel revokes automatic
-intent across frontend windows. Backend's monotonic `autoEligible` latch independently
-covers backend activity. Final native/backend checks remain authoritative. No success is
+release after capture/chunks settle. A local event plus BroadcastChannel reports
+activity across frontend windows. Backend's monotonic `autoEligible` latch is
+informational; every ready job needs a separate apply click. Final native/backend checks remain authoritative. No success is
 inferred from task acknowledgement or `awaiting_exit`. No quarantine/backup operations
-are performed by the frontend. Permission failure offers manual fallback, no OS prompt
-is claimed.
+are performed by the frontend. Permission failure is shown inline without a
+website fallback; no OS prompt is claimed.
 
 Integration limits for parent review:
 

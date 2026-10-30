@@ -40,10 +40,11 @@ Stages:
 | rolled_back | Old bundle restored and launch requested | rolled_back receipt |
 | recovery_required | Backup retained; needs recovery intervention | recovery_required receipt |
 
-`autoEligible` is a server-owned monotonic latch within a job. Backend writes and
-observed authentic busy work clear it. The adapter must also clear click intent
-on **any** frontend capture/activity in main, Mini or wizard and on mount/restore.
-It must never infer a healthy receipt from HTTP 200 or `awaiting_exit`.
+`autoEligible` is a server-owned activity-history latch within a job and is
+informational to the frontend. Ready always waits for an explicit
+«Обновить и перезапустить» click. No poll, mount, restore or download-completion
+path calls `install_update`. A healthy receipt is never inferred from HTTP 200
+or `awaiting_exit`.
 Map backend busy reason `request` to frontend `processing`.
 
 ## Native authority and capture coordination
@@ -56,15 +57,15 @@ installation, and native recording itself checks the same fence.
 `invoke('install_update', {jobId})` is accepted only by the bundled local main
 webview in release builds. It checks native capture, serializes installation,
 then sends a private per-process capability to the owned backend. Public loopback
-HTTP alone receives 403 from `/native-install`. Other windows observe the job;
-only the window owning the user's click should advance its initial one-click
-intent. No mount/startup/check function initiates installation.
+HTTP alone receives 403 from `/native-install`. Other windows observe the job.
+Downloading and applying an update are separate user actions; an explicit click
+in an authorized main window is required to start installation.
 
-An initial idle download may advance once from ready through native IPC. If
-`autoEligible` became false or any busy reason occurred, wait for another explicit
-click. A deferred result does not schedule installation after work completes.
+Ready always waits for an explicit «Обновить и перезапустить» click, including
+when there was no activity during download and `autoEligible` remains true.
+A deferred result does not schedule installation after work completes.
 No separate owner token is required by native IPC; the frontend controller's
-owner lease is local click ownership, not an installation credential.
+owner lease is local download ownership, not an installation credential.
 
 Critical preparation fences new backend writes (including complete streamed
 response lifetime) and native capture. Generation/transcription DB state,

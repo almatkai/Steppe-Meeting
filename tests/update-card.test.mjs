@@ -25,24 +25,26 @@ const { UpdateJobView } = await import('../src/components/settings/UpdateJobView
 const { api, setUpdateInstalling } = await import('../src/services/api.ts');
 const state = { stage: 'idle', initialized: true, supported: true, target: null, job: null, busy: [] };
 const render = patch => renderToStaticMarkup(React.createElement(UpdateJobView, {
-  state: { ...state, ...patch }, availableVersion: '2', status: 'Доступна 2', releaseUrl: 'https://github.com/almatkai/Steppe-Meeting/releases/tag/v2', checkDisabled: false,
-  onBegin() {}, onInstall() {}, onCancel() {}, onCheck() {}, onManual() {}, onRecover() {},
+  state: { ...state, ...patch }, availableVersion: '2', status: 'Доступна 2', blockReason: patch.blockReason, checkDisabled: false,
+  onBegin() {}, onInstall() {}, onCancel() {}, onCheck() {}, onRecover() {},
 }));
-test('available primary, disabled busy ready, installing without actions, restricted manual fallback', () => {
-  assert.match(render({}), /Обновить до 2/); assert.doesNotMatch(render({}), /Скачать вручную|Открыть релиз/);
+test('download and explicit update are separate; no state offers a website fallback', () => {
+  assert.match(render({}), /Скачать обновление/); assert.doesNotMatch(render({}), /Обновить до|Скачать вручную|Открыть релиз/);
   const busy = render({ stage: 'ready', busy: ['recording'] });
   assert.match(busy, /disabled="" aria-describedby="update-helper"/); assert.match(busy, /Аудио ещё используется/); assert.match(busy, /Отменить/);
+  assert.match(render({ stage: 'ready' }), /Обновить и перезапустить/);
+  assert.match(render({ stage: 'ready' }), /загружено и проверено/);
   assert.doesNotMatch(render({ stage: 'installing' }), /<button/);
-  assert.match(render({ supported: false }), /Скачать вручную/);
-  assert.match(render({ stage: 'failed', error: 'checksum' }), /Повторить/);
-  assert.match(render({ stage: 'failed', error: 'checksum' }), /Скачать вручную/);
-  assert.doesNotMatch(render({ stage: 'failed', error: 'network' }), /Скачать вручную/);
+  assert.match(render({ stage: 'failed', error: 'checksum' }), /Повторить загрузку/);
+  for (const patch of [{}, {supported:false}, ...['checksum','network','install_failed','not_writable','unsupported','verification_unavailable','journal_invalid','recovery_required','stale_selection','unavailable'].map(error=>({stage:'failed',error}))]) {
+    assert.doesNotMatch(render(patch), /Скачать вручную|Открыть релиз|github\.com/);
+  }
 });
 test('progress actual bytes and percent; live announcements change only at quarter increments', () => {
   const job = { bytes: 48_000_000, total: 112_000_000 };
   const html = render({ stage: 'downloading', job });
   assert.match(html, /aria-valuenow="42"/); assert.match(html, /48 из 112 МБ · 42 %/);
-  assert.match(html, /Загрузка обновления… 25 %/);
+  assert.match(html, /Загружаем обновление… 25 %/);
   assert.match(render({ stage: 'downloading', job: { bytes: 4_000_000 } }), /4 МБ/);
   assert.doesNotMatch(render({ stage: 'downloading', job: { bytes: 4_000_000 } }), /aria-valuenow=/);
 });
@@ -72,9 +74,9 @@ test('capture fence serializes and retains native lock until all users finish; r
   await assert.rejects(denied(), /installing/);
 });
 test('recovery and uncertain capability use honest copy; persistent live regions; cancel failure visible',()=>{
- const recovery=render({stage:'failed',error:'recovery_required'});assert.match(recovery,/Требуется восстановление/);assert.match(recovery,/Скачать вручную/);assert.doesNotMatch(recovery,/Предыдущая версия сохранена|Повторить/);
+ const recovery=render({stage:'failed',error:'recovery_required'});assert.match(recovery,/Требуется восстановление/);assert.doesNotMatch(recovery,/Предыдущая версия сохранена|Повторить|Скачать вручную/);
  assert.doesNotMatch(render({initialized:false,supported:false,error:'network'}),/Скачать вручную|поддерживаемой сборке/);
- const cancellation=render({stage:'downloading',error:'network',job:{bytes:10,cancellable:true}});assert.match(cancellation,/Не удалось загрузить/);assert.doesNotMatch(cancellation,/Установить и перезапустить/);
+ const cancellation=render({stage:'downloading',error:'network',job:{bytes:10,cancellable:true}});assert.match(cancellation,/Не удалось загрузить/);assert.doesNotMatch(cancellation,/Обновить и перезапустить/);
  for(const patch of [{},{stage:'failed',error:'checksum'}]) {const html=render(patch);assert.match(html,/role="status" aria-live="polite"/);assert.match(html,/role="alert" aria-live="assertive"/);}
 });
 test('production draft owner keeps explicit updater installation fenced until upload accepts',async()=>{
@@ -92,17 +94,31 @@ test('production draft owner keeps explicit updater installation fenced until up
 
 test('unresolved recovery remains actionable and retries display the current release',()=>{
  const html=render({stage:'failed',error:'recovery_required',receipt:{id:'tx',outcome:'recovery_required',version:'1'}});
- assert.match(html,/Восстановить предыдущую версию/);assert.match(html,/Скачать вручную/);
+ assert.match(html,/Восстановить предыдущую версию/);assert.doesNotMatch(html,/Скачать вручную/);
  assert.doesNotMatch(html,/Обновить до|>Повторить</);
  assert.match(render({stage:'failed',error:'download_failed',target:{latest_version:'1'}}),/Повторить/);
 });
 
-test('recovery has a manual exit even with an up-to-date tracker and no release URL',async()=>{
- const {updateDownloadUrl}=await import('../src/utils/updateController.ts');
+test('recovery never opens a website or promises a backup; explicit recovery remains available',()=>{
  const recovery={...state,stage:'failed',error:'recovery_required',receipt:{id:'broken',version:'2',outcome:'recovery_required'}};
- assert.equal(updateDownloadUrl(recovery,null),'https://github.com/almatkai/Steppe-Meeting/releases');
- const html=renderToStaticMarkup(React.createElement(UpdateJobView,{state:recovery,status:'Установлена последняя версия',releaseUrl:null,checkDisabled:false,onBegin(){},onInstall(){},onCancel(){},onCheck(){},onManual(){},onRecover(){}}));
- assert.match(html,/Скачать вручную/);assert.match(html,/Восстановить предыдущую версию/);
- assert.equal(updateDownloadUrl(state,null),null);
+ const html=renderToStaticMarkup(React.createElement(UpdateJobView,{state:recovery,status:'Установлена последняя версия',checkDisabled:false,onBegin(){},onInstall(){},onCancel(){},onCheck(){},onRecover(){}}));
+ assert.doesNotMatch(html,/Скачать вручную|github\.com|Предыдущая версия сохранена/);assert.match(html,/Восстановить предыдущую версию/);
  const busy=render({...recovery,error:'busy'});assert.doesNotMatch(busy,/>Повторить</);
+});
+
+test('each unsupported reason is precise and leaves only Check', () => {
+ const reasons={browser:'в приложении Steppe для macOS',development:'В режиме разработки',mini:'в главном окне Steppe',missing_identity:'нет данных о платформе',platform:'только для Mac на Apple Silicon'};
+ for(const [blockReason,text] of Object.entries(reasons)) {
+  const html=render({supported:false,blockReason});assert.ok(html.includes(text));
+  assert.equal((html.match(/<button/g)||[]).length,1);assert.match(html,/>Проверить<\/button>/);
+ }
+ for(const file of ['src/components/settings/UpdatesCard.tsx','src/components/settings/UpdateJobView.tsx']) assert.doesNotMatch(readFileSync(new URL('../'+file,import.meta.url),'utf8'),/openRelease|openUrl|window\.open|updateDownloadUrl|onManual/);
+});
+
+test('support and exact reason preserve the native production identity truth table',async()=>{
+ const {updateBlockReason}=await import('../src/utils/nativeBuildIdentity.ts');
+ for(const native of [false,true]) for(const production of [false,true]) for(const mini of [false,true]) for(const platform of ['', 'darwin','macos','linux']) for(const arch of ['', 'aarch64','arm64','x86_64']) {
+  const expected=native&&production&&!mini&&['darwin','macos'].includes(platform)&&['aarch64','arm64'].includes(arch);
+  assert.equal(updateBlockReason({native,production,mini,platform,arch})===null,expected);
+ }
 });

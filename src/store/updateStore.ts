@@ -1,7 +1,7 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { api } from '../services/api';
 import { isTauriEnvironment } from '../utils/tauriWindow';
-import { createUpdateTracker, safeReleaseUrl } from '../utils/updateTracker';
+import { createUpdateTracker } from '../utils/updateTracker';
 import { version } from '../../package.json';
 import { nativeBuildIdentity } from '../utils/nativeBuildIdentity';
 
@@ -18,17 +18,6 @@ export const updateTracker = createUpdateTracker({
   saveChannel: api.saveUpdateChannel,
   check: api.checkUpdates,
 });
-
-export async function openRelease(value?: string) {
-  const url = safeReleaseUrl(value);
-  if (!url) throw new Error('Некорректная ссылка на релиз GitHub');
-  if (isTauriEnvironment()) {
-    const { openUrl } = await import('@tauri-apps/plugin-opener');
-    await openUrl(url);
-  } else {
-    window.open(url, '_blank', 'noopener,noreferrer');
-  }
-}
 
 // App-owned: Settings unmounts never stop polling or discard the job.
 import { createUpdateController, updateActive } from '../utils/updateController';

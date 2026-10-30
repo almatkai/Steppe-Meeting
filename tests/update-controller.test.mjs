@@ -16,31 +16,37 @@ function fixture() {
   const controller = createUpdateController(port);
   return { port, calls, controller, ready: (patch = {}) => job = { ...job, stage: 'ready', ...patch }, busy: value => busy = value, receipt: value => receipt = value };
 }
-test('one click; rapid clicks coalesce; frozen target; acknowledgement never means success', async () => {
+test('download click coalesces and freezes target; ready waits for a separate install click', async () => {
   const f = fixture(); await f.controller.refresh();
   await Promise.all([f.controller.begin(target), f.controller.begin({ ...target, latest_version: '3' })]);
   assert.equal(f.calls.begin, 1); assert.equal(f.controller.getSnapshot().target.latest_version, '2');
   assert.ok(Object.isFrozen(f.controller.getSnapshot().target));
-  f.ready(); await f.controller.refresh(); assert.equal(f.calls.install, 1);
+  f.ready(); await f.controller.refresh(); await f.controller.refresh(); await f.controller.refresh();
+  assert.equal(f.calls.install, 0); assert.equal(f.controller.getSnapshot().stage, 'ready');
+  await f.controller.install(); assert.equal(f.calls.install, 1);
   assert.equal(f.controller.getSnapshot().stage, 'installing'); assert.equal(f.controller.getSnapshot().receipt, undefined);
 });
-test('busy at click or during download permanently requires explicit second click', async () => {
+test('busy at download or during download never installs when activity clears', async () => {
   for (const initialBusy of [true, false]) {
     const f = fixture(); if (initialBusy) f.busy(['recording']); await f.controller.refresh(); await f.controller.begin(target);
     if (!initialBusy) f.controller.activity(['generation']);
     f.busy([]); f.ready({ busy: [] }); await f.controller.refresh();
+    await f.controller.refresh(); await f.controller.refresh();
     assert.equal(f.calls.install, 0); await f.controller.install(); assert.equal(f.calls.install, 1);
   }
 });
-test('backend activity latch covers activity between frontend polls', async () => {
+test('backend eligibility is informational; both values wait for explicit install', async () => {
   const f = fixture(); await f.controller.refresh(); await f.controller.begin(target);
   f.ready({ autoEligible: false }); await f.controller.refresh(); assert.equal(f.calls.install, 0);
+  f.ready({ autoEligible: true }); await f.controller.refresh(); assert.equal(f.calls.install, 0);
 });
 test('final 409 returns to ready and never retries automatically', async () => {
   const f = fixture(); f.port.install = async () => { f.calls.install++; throw { status: 409 }; };
   await f.controller.refresh(); await f.controller.begin(target); f.ready(); await f.controller.refresh();
+  await f.controller.install();
   assert.equal(f.controller.getSnapshot().stage, 'ready'); assert.equal(f.controller.getSnapshot().error, 'busy');
-  await f.controller.refresh(); assert.equal(f.calls.install, 1);
+  f.busy([]); await f.controller.refresh(); await f.controller.refresh(); assert.equal(f.calls.install, 1);
+  assert.equal(f.controller.getSnapshot().error, undefined);
 });
 test('cancel during pending begin cancels its eventual job and discards target', async () => {
   const f = fixture(), pending = deferred(); f.port.begin = () => pending.promise;
@@ -55,10 +61,11 @@ test('late poll cannot resurrect cancelled intent', async () => {
   pending.resolve({ supported: true, busy: [], job: { id: 'job', target, stage: 'ready', busy: [], autoEligible: true } });
   await poll; assert.equal(f.controller.getSnapshot().stage, 'idle'); assert.equal(f.calls.install, 0);
 });
-test('restores across navigation/windows never claim auto-install ownership', async () => {
+test('restored ready jobs wait for an explicit install in any main window', async () => {
   const f = fixture(); await f.controller.refresh(); await f.controller.begin(target); f.ready();
   const other = createUpdateController(f.port); await other.refresh(); assert.equal(other.getSnapshot().stage, 'ready'); assert.equal(f.calls.install, 0);
-  const unmount = f.controller.subscribe(() => {}); unmount(); await f.controller.refresh(); assert.equal(f.calls.install, 1);
+  const unmount = f.controller.subscribe(() => {}); unmount(); await f.controller.refresh(); assert.equal(f.calls.install, 0);
+  await other.install(); assert.equal(f.calls.install, 1);
 });
 test('only healthy receipt produces success; rollback/recovery remain failures', async () => {
   for (const outcome of ['healthy', 'rolled_back', 'recovery_required']) {
@@ -92,9 +99,23 @@ test('terminal receipt always excludes job before and after reset', async () => 
   await f.controller.refresh(); f.controller.reset(); await f.controller.refresh(); assert.equal(f.controller.getSnapshot().stage,'idle');
 });
 test('acknowledged terminal from another observer cannot strand an installing window',async()=>{
- const f=fixture();await f.controller.refresh();await f.controller.begin(target);f.ready();await f.controller.refresh();assert.equal(f.controller.getSnapshot().stage,'installing');
+ const f=fixture();await f.controller.refresh();await f.controller.begin(target);f.ready();await f.controller.refresh();await f.controller.install();assert.equal(f.controller.getSnapshot().stage,'installing');
  f.port.observe=async()=>({supported:true,busy:[],job:null,terminal:{id:'job',outcome:'healthy'}});
  await f.controller.refresh();assert.equal(f.controller.getSnapshot().stage,'idle');assert.equal(f.controller.getSnapshot().job,null);
+});
+
+test('immediately-ready download, repeated install clicks, busy guard and ready cancellation', async () => {
+  const f = fixture();
+  f.port.begin = async () => { f.calls.begin++; return { owner: 'lease', job: { id: 'ready', target, stage: 'ready', busy: [], autoEligible: true } }; };
+  await f.controller.refresh(); await f.controller.begin(target);
+  assert.equal(f.controller.getSnapshot().stage, 'ready'); assert.equal(f.calls.install, 0);
+  const pending = deferred();
+  f.port.install = async () => { f.calls.install++; await pending.promise; return {id:'ready',target,stage:'installing',busy:[],autoEligible:true}; };
+  const first = f.controller.install(); await f.controller.install(); assert.equal(f.calls.install, 1);
+  pending.resolve(); await first;
+  const busy = fixture(); await busy.controller.refresh(); await busy.controller.begin(target); busy.ready({busy:['recording']}); busy.busy(['recording']); await busy.controller.refresh(); await busy.controller.install(); assert.equal(busy.calls.install, 0);
+  busy.busy([]); busy.ready({busy:[]}); await busy.controller.refresh(); await busy.controller.cancel(); await busy.controller.refresh();
+  assert.equal(busy.calls.cancel, 1); assert.equal(busy.calls.install, 0); assert.equal(busy.controller.getSnapshot().stage, 'idle');
 });
 
 test('start failures without a job survive idle polls',async()=>{
