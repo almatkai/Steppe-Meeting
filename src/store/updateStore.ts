@@ -3,15 +3,16 @@ import { api } from '../services/api';
 import { isTauriEnvironment } from '../utils/tauriWindow';
 import { createUpdateTracker, safeReleaseUrl } from '../utils/updateTracker';
 import { version } from '../../package.json';
+import { nativeBuildIdentity } from '../utils/nativeBuildIdentity';
 
 export const updateTracker = createUpdateTracker({
   async runtime() {
     const native = isTauriEnvironment();
-    // Tauri injects the actual executable target through its build/dev hook.
+    // The packaging pipeline or Tauri build/dev hook supplies the executable target.
     // Browser architecture stays unknown rather than guessing Apple Silicon
     // from a webview user-agent that reports Intel even on ARM machines.
-    const platform = native ? import.meta.env.TAURI_ENV_PLATFORM || '' : /Mac/.test(navigator.platform) ? 'darwin' : /Win/.test(navigator.platform) ? 'windows' : /Linux/.test(navigator.platform) ? 'linux' : '';
-    return { current_version: native ? await getVersion() : version, platform, arch: native ? import.meta.env.TAURI_ENV_ARCH || '' : '' };
+    const platform = native ? nativeBuildIdentity.platform : /Mac/.test(navigator.platform) ? 'darwin' : /Win/.test(navigator.platform) ? 'windows' : /Linux/.test(navigator.platform) ? 'linux' : '';
+    return { current_version: native ? await getVersion() : version, platform, arch: native ? nativeBuildIdentity.arch : '' };
   },
   async loadChannel() { return (await api.getConfig()).update_channel === 'beta' ? 'beta' : 'stable'; },
   saveChannel: api.saveUpdateChannel,

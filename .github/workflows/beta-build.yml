@@ -49,6 +49,7 @@ jobs:
           xcrun --sdk macosx --show-sdk-version
           npm install --global pnpm@9.15.9
           pnpm install --frozen-lockfile
+          pnpm exec playwright install --only-shell chromium
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup component add rustfmt
@@ -98,3 +99,7 @@ jobs:
           path: |
             build/*.log
             build/packaged-updater-smoke.json
+            build/shipping-frontend-smoke.json
+            build/embedded-frontend-verification.json
+            build/embedded-frontend-smoke.json
+            build/embedded-frontend/**

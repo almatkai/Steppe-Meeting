@@ -1,5 +1,27 @@
 # Frontend updater integration handoff
 
+## Beta.7 shipping capability regression (2026-10-30)
+
+The beta.4–beta.6 Vite subprocess ran before Tauri supplied its target variables.
+The installed frontend therefore sent blank platform/arch and never enabled the
+automatic updater. `build-beta.py` now passes its validated macOS ARM64 target to
+Vite explicitly; `nativeBuildIdentity.ts` is shared by the gate and release query.
+All existing native/production/platform/architecture/Mini restrictions remain.
+
+`node scripts/smoke-shipping-frontend.mjs --matrix` clears inherited Tauri variables,
+uses the actual shipping build function and opens the unmodified shipping index
+and compiled assets. Read-only fake HTTP/IPC supplies future release metadata;
+the real Settings action and release request are asserted. Browser, Mini, dev,
+unsupported target and missing metadata remain restricted. Every HTTP request is
+intercepted before opening a socket; no download/install action is clicked.
+The build additionally recovers the exact tested JavaScript from the signed Mach-O
+and reruns the production UI gate on those bytes. This closes the earlier fixture
+coverage gap; it does not claim a real user's native installation test.
+
+Users on beta.4–beta.6 need a manual installation of beta.7 once, as do beta.2/3
+and earlier. Publishing new release metadata cannot repair their compiled gate.
+The historical implementation notes below describe earlier validation only.
+
 Frontend is implemented on the approved branch without running live updater calls,
 changing live settings/data or touching an installed application. The sole production
 adapter is `src/services/updatePort.ts`, bound to `native-updater-contract.md` protocol 1.

@@ -23,19 +23,19 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(command, timeout=240):
+def run(command, timeout=240, env=None):
     print("Running:", " ".join(map(str, command)), flush=True)
-    subprocess.run(list(map(str, command)), cwd=ROOT, check=True, timeout=timeout)
+    subprocess.run(list(map(str, command)), cwd=ROOT, check=True, timeout=timeout, env=env)
 
 
 def inputs():
     patterns = ["src/**/*", "src-tauri/src/**/*", "src-tauri/icons/*", "public/**/*",
                 "backend/*.py", "backend/engine/*.py", "backend/engine/core/*.py",
                 "backend/run_backend.sh", "backend/requirements*.txt", "backend/requirements*.lock",
-                "scripts/*.py", "scripts/updater-fixture/*", "tests/*.test.mjs", "tests/test_*.py",
+                "scripts/*.py", "scripts/*.mjs", "scripts/updater-fixture/*", "tests/*.test.mjs", "tests/test_*.py",
                 "backend/tests/test_*.py", "docs/*updater*.md"]
     files = {p for pattern in patterns for p in ROOT.glob(pattern) if p.is_file()}
-    files.update(ROOT / p for p in (".github/workflows/beta-build.yml", "DISTRIBUTION.md", "package.json", "pnpm-lock.yaml", "src-tauri/Cargo.lock",
+    files.update(ROOT / p for p in (".github/workflows/beta-build.yml", "DISTRIBUTION.md", "package.json", "package-lock.json", "pnpm-lock.yaml", "index.html", "vite.config.ts", "src-tauri/Cargo.lock",
                                     "src-tauri/Cargo.toml", "src-tauri/tauri.conf.json", "src-tauri/tauri.beta.conf.json", "src-tauri/build.rs",
                                     "src-tauri/Info.plist", "src-tauri/Entitlements.plist", "scripts/runtime-sources.json", "scripts/build-beta.py", "scripts/smoke-bundled-runtime.py", "scripts/smoke-stt-codecs.py", "scripts/smoke-packaged-updater.py", "scripts/updater-fixture/backend.py", "scripts/updater-fixture/index.html"))
     return {str(p.relative_to(ROOT)): sha(p) for p in sorted(files)}
@@ -45,6 +45,14 @@ def reject_fixture_environment():
     for key in ("CARGO_FEATURE_PACKAGED_UPDATER_FIXTURE", "STEPPE_FIXTURE_ROOT", "STEPPE_FIXTURE_PORT", "STEPPE_FIXTURE_VERSION"):
         assert not os.environ.get(key), f"Fixture environment forbidden in shipping build: {key}"
     assert "packaged-updater-fixture" not in " ".join(sys.argv[1:]), "Fixture flags forbidden"
+
+
+def frontend_build():
+    # Vite runs BEFORE the Tauri CLI, so its hook cannot supply target identity.
+    # This packaging pipeline builds only the validated host macOS ARM64 target.
+    assert platform.system() == "Darwin" and platform.machine() == "arm64", "Build on Apple Silicon macOS"
+    env = {**os.environ, "TAURI_ENV_PLATFORM": "darwin", "TAURI_ENV_ARCH": "aarch64"}
+    run(["node", "node_modules/vite/bin/vite.js", "build"], env=env)
 
 
 def native_build():
@@ -131,14 +139,18 @@ def main():
     assert f'version = "{version}"' in (ROOT / "src-tauri/Cargo.toml").read_text()
     run([sys.executable, ROOT / "scripts/prepare-runtime.py"], timeout=360)
     run(["node", "node_modules/typescript/bin/tsc", "-b"])
-    run(["node", "node_modules/vite/bin/vite.js", "build"])
+    frontend_build()
+    run(["node", "scripts/smoke-shipping-frontend.mjs", "--dist", "dist", "--matrix"], timeout=240)
     source = inputs()
-    stamp = {"version": version, "arch": "aarch64", "source_head": subprocess.check_output(
+    stamp = {"version": version, "platform": "darwin", "arch": "aarch64", "source_head": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(), "source_files": source,
         "frontend_files": {str(p.relative_to(ROOT / "dist")): sha(p) for p in sorted((ROOT / "dist").rglob("*")) if p.is_file()},
         "runtime_manifest_sha256": sha(BUILD / "bundled-runtime/manifest.json")}
     (BUILD / "build-info.json").write_text(json.dumps(stamp, indent=2) + "\n")
     native_build()
+    run(["node", "scripts/verify-embedded-frontend.mjs"])
+    run(["node", "scripts/smoke-shipping-frontend.mjs", "--dist", "build/embedded-frontend",
+         "--receipt", "build/embedded-frontend-smoke.json"], timeout=120)
     assert inputs() == source, "Source changed during native build; rebuild before distributing"
     built = ROOT / "src-tauri/target/release/bundle/macos/Steppe Meeting.app"
     manifest = audit(built, stamp)

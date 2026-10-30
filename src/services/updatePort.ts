@@ -4,10 +4,11 @@ import { api, updateRequest } from './api';
 import { frontendCaptureBusy } from '../utils/updateCapture';
 import { isMiniWindow, isTauriEnvironment } from '../utils/tauriWindow';
 import { createUpdatePort } from './updateAdapter';
+import { nativeBuildIdentity } from '../utils/nativeBuildIdentity';
 
 // All protocol mapping lives in the injected production adapter, also exercised in Node.
 const enabled = () => isTauriEnvironment() && Boolean(import.meta.env?.PROD);
-export const updaterSupported = () => enabled() && ['darwin','macos'].includes(import.meta.env.TAURI_ENV_PLATFORM || '') && ['aarch64','arm64'].includes(import.meta.env.TAURI_ENV_ARCH || '') && !isMiniWindow();
+export const updaterSupported = () => enabled() && ['darwin','macos'].includes(nativeBuildIdentity.platform) && ['aarch64','arm64'].includes(nativeBuildIdentity.arch) && !isMiniWindow();
 export const updatePort = createUpdatePort({
   enabled,
   supported: updaterSupported,
