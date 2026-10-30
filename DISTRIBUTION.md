@@ -1,14 +1,25 @@
-# Steppe Meeting 0.2.0-beta.5 — beta distribution
+# Steppe Meeting 0.2.0-beta.6 — beta distribution
 
 Target: Apple Silicon (`arm64` / `aarch64`), macOS 15 or later. Intel builds are not produced by this packaging configuration.
 
-## Beta.5 distribution purpose
+## Beta.6: STT recommendations
 
-Beta.5 has the same functionality as beta.4. It is built as a strictly newer
-update target so users who manually bootstrap beta.4 can personally test the
-one-click download, installation and restart flow. No feature changes or fixes
-are included in beta.5. Publication and interactive testing are separate steps;
-this document does not claim that either has already happened.
+Beta.6 adds evidence-backed labels to the local STT model catalog:
+
+- GigaAM INT8: «Лучший в целом» and «Лучший для казахского» on supported devices.
+- Standard Whisper Large v3 Turbo: «Лучший для русского» and «Для рус + англ», with an always-visible «английский не сравнивали» caveat.
+- Wav2Vec2 RU/KK: a CPU alternative for Russian and Kazakh.
+
+«Как определено» discloses the 30.10.2026 M5 Pro test, WER results and the small
+FLEURS corpus: 12 Russian phrases, 12 Kazakh phrases and three artificial RU+KK
+splices. These splices do not establish live language-switching quality. English
+was not tested. Speed refers only to the tested implementations on that Mac.
+Unsupported GigaAM has no actionable winner labels. Untested variants, including
+INT4, INT6 and Whisper Small, have no winner claim; the old Small recommendation
+is removed. Custom Whisper quality warnings remain visible.
+
+No model is selected automatically. Defaults, inference routing and user settings
+are unchanged. No private recordings or benchmark artifacts accompany the build.
 
 ## Functionality carried forward from beta.4
 
@@ -20,8 +31,8 @@ receipts confirm completion; explicit recovery restores the previous bundle.
 Manual download remains available for unsupported builds, verification failures
 and installation errors, including a non-writable Applications directory.
 
-Beta.2 and beta.3 only track releases: the user must manually install beta.4 once
-to bootstrap this updater. Application Support, recordings, model weights and
+Beta.3 and earlier require a manual DMG bootstrap to beta.4 or later.
+Users already on beta.4 or later can use Settings → Updates → Beta → Check → Update. Application Support, recordings, model weights and
 STT/LLM preferences are preserved; no global default model changes are included.
 The build remains ad-hoc signed and is not notarized. Real user button interaction,
 keyboard focus and screen-reader behavior remain for interactive verification.
@@ -41,9 +52,9 @@ The script applies `src-tauri/tauri.beta.conf.json` on top of the standard Tauri
 Only a successful final `VERIFIED LOCAL BETA` message establishes a distributable build. In GitHub Actions this message describes verification on the macOS ARM64 runner, not on the release coordinator's Mac. The `Build macOS beta` workflow also requires the source tests, native backend lifecycle tests and the isolated packaged updater handoff/recovery gate to pass before uploading `steppe-beta-aarch64`. Expected build outputs:
 
 ```text
-build/release-0.2.0-beta.5-aarch64/
-  Steppe-Meeting_0.2.0-beta.5_aarch64.app
-  Steppe-Meeting_0.2.0-beta.5_aarch64.dmg
+build/release-0.2.0-beta.6-aarch64/
+  Steppe-Meeting_0.2.0-beta.6_aarch64.app
+  Steppe-Meeting_0.2.0-beta.6_aarch64.dmg
   SHA256SUMS
   app-content-manifest.json
   build-info.json
@@ -65,7 +76,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib backend::tests --locked
 python3 scripts/smoke-bundled-runtime.py --app 'src-tauri/target/release/bundle/macos/Steppe Meeting.app'
 ```
 
-The backend smoke checks the actual packaged server and its owned process shutdown. It does not prove the native application's Quit lifecycle or visual UI. Native testing must use the new release app, a free port 8008 and isolated user data; do not stop a real server to make a test pass. React tests cover Stop; frontend asset hashes identify the compiled input. Existing debug app bundles and an installed older app are not release evidence.
+The backend smoke checks the actual packaged server and its owned process shutdown. It does not prove the native application's Quit lifecycle or visual UI. Native testing must use a temporary release bundle, a private port other than 8008 and isolated user data; do not stop a real server or launch the installed app to make a test pass. React tests cover Stop; frontend asset hashes identify the compiled input. Existing debug app bundles and an installed older app are not release evidence.
 
 ## Bundled runtime and network behavior
 

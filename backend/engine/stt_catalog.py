@@ -33,13 +33,13 @@ STT_MODELS_CATALOG: dict[str, dict[str, Any]] = {}
 for model_id, name, size, description in (
     ("tiny", "Whisper Tiny", 75, "Минимальные требования, быстрое распознавание"),
     ("base", "Whisper Base", 145, "Быстрая базовая модель для простых диалогов"),
-    ("small", "Whisper Small", 480, "Баланс скорости и качества для русского и казахского"),
+    ("small", "Whisper Small", 480, "Компактная модель Whisper; в тесте Steppe не проверялась"),
     ("medium", "Whisper Medium", 1500, "Высокая точность распознавания профессиональной речи"),
     ("large-v3-turbo", "Whisper Large v3 Turbo", 1600, "Многоязычная модель, включая казахский, русский и английский"),
 ):
     STT_MODELS_CATALOG[model_id] = {
         "id": model_id, "name": name, "size_mb": size, "description": description,
-        "recommended": model_id == "small", "engine": "faster-whisper",
+        "recommended": False, "engine": "faster-whisper",
         "languages": ["kk", "ru", "en", "uz"], "streaming": "chunked",
         "source_url": "https://huggingface.co/" + ("mobiuslabsgmbh" if model_id == "large-v3-turbo" else "Systran") + "/faster-whisper-" + model_id,
         "download_kind": "whisper",
@@ -118,6 +118,50 @@ for language, version, size, label in (
         "download_kind": "zip", "archive_root": archive_root,
         "download_url": f"https://alphacephei.com/vosk/models/{archive_root}.zip",
         "required_files": ("am/final.mdl", "conf/mfcc.conf", "conf/model.conf", "graph/Gr.fst", "graph/HCLr.fst"),
+    }
+
+
+STT_BENCHMARK_BASIS = (
+    "Тест 30.10.2026 на M5 Pro. Рекомендации — среди проверенных моделей Steppe. "
+    "FLEURS test: 12 русских фраз (222 слова), 12 казахских (228 слов) "
+    "и 3 искусственные минутные склейки RU+KK (225 слов). WER — меньше лучше. "
+    "Корпус маленький; живое переключение языков не проверялось. Английский не тестировался."
+)
+
+# Aggregate public results only: private recordings are not a reference corpus.
+STT_MODELS_CATALOG["gigaam-multilingual-int8"]["recommendation"] = {
+    "labels": ["Лучший в целом", "Лучший для казахского"],
+    "use_case": None, "use_case_caveat": None,
+    "note": "Для русского и казахского; RU+KK проверено на искусственных склейках.",
+    "result": "WER: русский 5,9 %, казахский 8,8 %, склейки RU+KK 10,7 %. Самая быстрая из проверенных реализаций на M5 Pro. INT4 и INT6 не проверялись.",
+}
+STT_MODELS_CATALOG["large-v3-turbo"]["recommendation"] = {
+    "labels": ["Лучший для русского"],
+    "use_case": "Для рус + англ", "use_case_caveat": "английский не сравнивали",
+    "note": None,
+    "result": "WER: русский 2,7 %, казахский 25,9 %, склейки RU+KK 28,9 %. «Для рус + англ» — по заявленным возможностям модели, а не по сравнению английского.",
+}
+STT_MODELS_CATALOG["wav2vec2-rukk"]["recommendation"] = {
+    "labels": [], "use_case": None, "use_case_caveat": None,
+    "note": "CPU-вариант для русского и казахского.",
+    "result": "WER: русский 13,1 %, казахский 14,0 %, склейки RU+KK 15,6 %. Работает на CPU; скорость на Intel и Windows не измерялась.",
+}
+
+
+def get_model_recommendation(model_id: str, supported: bool) -> dict[str, Any] | None:
+    info = get_model_info(model_id)
+    recommendation = info.get("recommendation")
+    if not recommendation or info.get("quality_warning"):
+        return None
+    # Do not offer an unavailable implementation as an actionable winner.
+    return {
+        **recommendation,
+        "labels": list(recommendation["labels"]) if supported else [],
+        "note": recommendation["note"] if supported else (
+            "На тесте лучшая в целом — требует совместимого Apple Silicon и Python."
+            if model_id == "gigaam-multilingual-int8" else "Модель недоступна на этом устройстве."
+        ),
+        "basis": STT_BENCHMARK_BASIS,
     }
 
 

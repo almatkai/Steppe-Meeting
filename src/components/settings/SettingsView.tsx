@@ -24,6 +24,7 @@ import {
 import { settingsAutosave, loadSettingsConfig } from "../../store/settingsStore";
 import { UpdatesCard } from "./UpdatesCard";
 import { SaveIndicator } from "./SaveIndicator";
+import { STTRecommendationDetails, STTRecommendationLabels } from "./STTRecommendation";
 import { CliSettings } from "./CliSettings";
 import { cliKey, cliReadiness, cliStatus } from "../../utils/cliSettings";
 import { api } from "../../services/api";
@@ -737,12 +738,14 @@ export const SettingsView: React.FC = () => {
                             <span className="text-[10px] text-neutral-500 shrink-0 whitespace-nowrap">~{m.size_mb} МБ</span>
                           )}
                         </div>
+                        <STTRecommendationLabels recommendation={m.recommendation} />
                         <p className="text-[11px] text-neutral-400 mt-1 leading-relaxed">{m.description}</p>
                         <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[10px] text-neutral-500">
                           <span>{m.languages?.map((language) => language.toUpperCase()).join(" · ")}</span>
                           <span>{m.streaming === "native" ? "Потоковый движок" : "VAD + порционное распознавание"}</span>
                           <a href={m.source_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-neutral-400 hover:text-white underline">Источник</a>
                         </div>
+                        <STTRecommendationDetails recommendation={m.recommendation} />
                         {m.compatibility_error && <p className="text-[11px] text-amber-400 mt-1">{m.compatibility_error}</p>}
 
                         {isSelected && (

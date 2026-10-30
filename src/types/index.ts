@@ -89,12 +89,22 @@ export interface Meeting {
   template_values_kz?: Record<string, any>;
 }
 
+export interface STTModelRecommendation {
+  labels: string[];
+  use_case: string | null;
+  use_case_caveat: string | null;
+  note: string | null;
+  result: string;
+  basis: string;
+}
+
 export interface WhisperModelCatalogItem {
   id: string;
   name: string;
   size_mb: number;
   description: string;
   recommended: boolean;
+  recommendation?: STTModelRecommendation | null;
   downloaded: boolean;
   disk_size_mb: number;
   is_downloading: boolean;

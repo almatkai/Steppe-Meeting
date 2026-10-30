@@ -49,6 +49,20 @@ class STTAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         installer.assert_called_once_with("vosk-small-kz")
 
+    def test_status_exposes_recommendation_evidence_without_model_or_environment_setup(self):
+        service = server.whisper_service
+        with patch.object(service, "is_model_downloaded", return_value=False), \
+             patch.object(service, "is_env_installed", return_value=False), \
+             patch.object(service, "env_error", return_value=None), \
+             patch.object(service, "compatibility_error", return_value=None), \
+             patch.object(server, "get_setting", side_effect=lambda key, default=None: default):
+            response = self.client.get("/api/v1/system/whisper/status")
+        self.assertEqual(response.status_code, 200)
+        catalog = {item["id"]: item for item in response.json()["local"]["catalog"]}
+        self.assertEqual(catalog["gigaam-multilingual-int8"]["recommendation"]["labels"], ["Лучший в целом", "Лучший для казахского"])
+        self.assertIn("английский не сравнивали", catalog["large-v3-turbo"]["recommendation"]["use_case_caveat"])
+        self.assertIsNone(catalog["whisper-turbo-kaz-rus-v1"]["recommendation"])
+
     def test_model_action_errors_are_useful_client_errors(self):
         for action in ("install-env", "download-model", "delete-model"):
             response = self.client.post(f"/api/v1/system/whisper/{action}", json={"model": "../outside"})

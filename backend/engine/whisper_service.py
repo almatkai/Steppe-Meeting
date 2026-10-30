@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 from app_data import get_app_data_dir
 from . import local_stt
 from .stt_runtime import REPAIR_MESSAGE, _codec_probe, codec_error
-from .stt_catalog import RUNTIMES, STT_MODELS_CATALOG, compatibility_error, get_model_info
+from .stt_catalog import RUNTIMES, STT_MODELS_CATALOG, compatibility_error, get_model_info, get_model_recommendation
 
 logger = logging.getLogger("steppe.desktop.whisper")
 WHISPER_MODELS_CATALOG = STT_MODELS_CATALOG
@@ -116,8 +116,11 @@ def get_models_catalog_status() -> List[Dict[str, Any]]:
     for model_id, info in STT_MODELS_CATALOG.items():
         downloaded = is_model_downloaded(model_id)
         error = compatibility_error(model_id)
+        recommendation = get_model_recommendation(model_id, supported=error is None)
         result.append({
             **{key: info[key] for key in public_fields},
+            "recommended": bool(info["recommended"] and recommendation and recommendation["labels"]),
+            "recommendation": recommendation,
             "downloaded": downloaded,
             "disk_size_mb": get_model_disk_size_mb(model_id) if downloaded else 0.0,
             "is_downloading": _download_state["downloading"] and _download_state["model"] == model_id,
